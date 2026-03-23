@@ -1,0 +1,18 @@
+[Unit]
+Description=TeslaUSB Neo Daemon
+After=local-fs.target
+DefaultDependencies=no
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/teslausb
+Restart=always
+RestartSec=2
+WatchdogSec=30
+NotifyAccess=main
+ProtectSystem=strict
+ReadWritePaths=/data /sys/kernel/config /sys/class/leds /proc/sys/vm /sys/block
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
