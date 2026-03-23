@@ -61,189 +61,129 @@ Partitions p3–p6 are raw block devices presented directly to the Tesla via the
 
 ## Installation
 
-### Prerequisites
+### What You Need
 
-- A computer with an SD card reader
-- [Go 1.22+](https://go.dev/dl/) installed (for building from source)
 - A Raspberry Pi Zero 2 W
-- A microSD card (64 GB+, high-endurance recommended)
-- A network share or cloud storage for archiving (CIFS/SMB, NFS, rsync, or rclone)
+- A microSD card (64 GB minimum, 256 GB recommended). Use a **high-endurance** card: Samsung PRO Endurance or SanDisk High Endurance
+- A USB-A to Micro-USB **data** cable (not a charge-only cable)
+- A computer with an SD card reader (Mac, Windows, or Linux)
+- A network share for archiving: CIFS/SMB (Synology, Windows share), NFS, rsync server, or rclone remote
+- 2.4 GHz WiFi network in range of where you park
 
-### Option A: Flash a Pre-Built Image (Recommended)
+### Step 1: Flash Raspberry Pi OS Lite
 
-> Pre-built images will be available on the [Releases](https://github.com/ejaramilla/teslausb-neo/releases) page once the Buildroot image pipeline is set up.
+1. Download and install [Raspberry Pi Imager](https://www.raspberrypi.com/software/) on your computer
+2. Insert your SD card
+3. In Raspberry Pi Imager:
+   - **Device**: Raspberry Pi Zero 2 W
+   - **OS**: Raspberry Pi OS Lite (64-bit, Bookworm) — under "Raspberry Pi OS (other)"
+   - **Storage**: Your SD card
+4. Click the **gear icon** (or "Edit Settings") before writing:
+   - **Set hostname**: `teslausb`
+   - **Enable SSH**: Yes, use password authentication
+   - **Set username/password**: `pi` / your chosen password
+   - **Configure WiFi**: Enter your home WiFi SSID and password, select your country
+5. Click **Write** and wait for it to finish
 
-1. Download the latest `teslausb-neo-sdcard.img.xz` from Releases
-2. Flash it to your SD card:
-   ```bash
-   # macOS
-   xzcat teslausb-neo-sdcard.img.xz | sudo dd of=/dev/rdiskN bs=4m
-
-   # Linux
-   xzcat teslausb-neo-sdcard.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
-
-   # Or use Raspberry Pi Imager / balenaEtcher
-   ```
-3. Mount the `data` partition (p2) on your computer and create your config file:
-   ```bash
-   # The data partition should auto-mount. Create the config:
-   cp teslausb.example.toml /Volumes/data/teslausb.toml   # macOS
-   cp teslausb.example.toml /mnt/data/teslausb.toml       # Linux
-   ```
-4. Edit `teslausb.toml` (see [Configuration](#configuration) below)
-5. Eject the SD card, insert it into the Pi Zero 2 W
-6. Connect the Pi to your Tesla's glovebox USB port with a data cable
-7. The dashcam icon should appear on the Tesla touchscreen within ~5 seconds
-
-### Option B: Build from Source
-
-#### 1. Clone and Build the Binary
+### Step 2: Build the Binary (on your Mac)
 
 ```bash
+# Install Go if you don't have it (https://go.dev/dl/)
+# Or: brew install go
+
+# Clone and build
 git clone https://github.com/ejaramilla/teslausb-neo.git
 cd teslausb-neo
-
-# Build for Pi Zero 2 W (ARM64)
 make binary-arm64
 
-# Output: build/teslausb-linux-arm64 (10 MB, statically linked)
+# Output: build/teslausb-linux-arm64 (10 MB)
 ```
 
-#### 2. Prepare the SD Card
+### Step 3: Boot the Pi and Run Setup
 
-Partition your SD card with the layout shown above. On Linux:
-
-```bash
-export DEVICE=/dev/sdX   # YOUR SD CARD - double check!
-
-# Create partition table
-sudo parted $DEVICE --script mktable msdos
-
-# Create partitions
-sudo parted $DEVICE --script mkpart primary fat32 1MiB 51MiB
-sudo parted $DEVICE --script set 1 boot on
-sudo parted $DEVICE --script mkpart primary ext4 51MiB 251MiB
-sudo parted $DEVICE --script mkpart primary ext4 251MiB 551MiB
-sudo parted $DEVICE --script mkpart primary 551MiB 200GiB      # cam
-sudo parted $DEVICE --script mkpart primary 200GiB 230GiB      # music
-# Note: MBR only supports 4 primary. For lightshow + boombox,
-# create an extended partition or skip them for now.
-
-# Format partitions
-sudo mkfs.vfat -n boot ${DEVICE}1
-sudo mkfs.ext4 -L rootfs ${DEVICE}2
-sudo mkfs.ext4 -L data ${DEVICE}3
-sudo mkfs.exfat -L cam ${DEVICE}4
-sudo mkfs.exfat -L music ${DEVICE}5
-```
-
-#### 3. Install Raspberry Pi OS Lite (Temporary Base)
-
-Until the Buildroot image is available, you can use Raspberry Pi OS Lite (64-bit, Bookworm) as the base:
-
-1. Flash **Raspberry Pi OS Lite (64-bit)** to the SD card using [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
-2. Enable SSH: create an empty file named `ssh` on the boot partition
-3. Configure WiFi: create `wpa_supplicant.conf` on the boot partition:
-   ```
-   country=US
-   ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-   update_config=1
-
-   network={
-       ssid="YourNetworkName"
-       psk="YourPassword"
-   }
-   ```
-4. Boot the Pi, SSH in: `ssh pi@raspberrypi.local` (default password: `raspberry`)
-5. Install dependencies:
+1. Insert the SD card into the Pi Zero 2 W
+2. Connect the Pi to **any USB power source** (not the Tesla yet — use a phone charger or computer USB port)
+3. Wait ~30 seconds for first boot, then SSH in:
    ```bash
-   sudo apt update
-   sudo apt install -y exfatprogs rsync rclone
+   ssh pi@teslausb.local
    ```
+4. Copy the binary and setup script to the Pi (from a second terminal on your Mac):
+   ```bash
+   scp build/teslausb-linux-arm64 pi@teslausb.local:/tmp/teslausb
+   scp setup.sh pi@teslausb.local:/tmp/setup.sh
+   ```
+5. Back in the Pi SSH session, run the setup script:
+   ```bash
+   sudo bash /tmp/setup.sh
+   ```
+   The script will:
+   - Install required packages (exfatprogs, rsync, rclone)
+   - Create partitions (data, cam, music, lightshow) on the SD card
+   - Format them as exFAT with the Tesla folder structure (TeslaCam/, Music/, LightShow/)
+   - Install the teslausb binary and systemd service
+   - Configure USB gadget kernel modules (dwc2, libcomposite)
+   - Optimize boot (disable HDMI, audio, unnecessary services)
+   - Enable hardware watchdog
+   - Create a default config at `/data/teslausb.toml`
 
-#### 4. Install the Binary and Configure
+### Step 4: Edit Your Config
 
 ```bash
-# Copy binary to the Pi
-scp build/teslausb-linux-arm64 pi@raspberrypi.local:/tmp/teslausb
-
-# SSH into the Pi
-ssh pi@raspberrypi.local
-
-# Install
-sudo mv /tmp/teslausb /usr/bin/teslausb
-sudo chmod +x /usr/bin/teslausb
-
-# Create data directory
-sudo mkdir -p /data
-
-# Create config
 sudo nano /data/teslausb.toml
-# (paste your config - see Configuration section below)
+```
 
-# Install systemd service
-sudo tee /etc/systemd/system/teslausb.service << 'EOF'
-[Unit]
-Description=TeslaUSB Neo Daemon
-After=local-fs.target
-DefaultDependencies=no
+At minimum, set your WiFi SSID and archive server. See [Configuration](#configuration) for examples.
 
-[Service]
-Type=notify
-ExecStart=/usr/bin/teslausb
-Restart=always
-RestartSec=2
-WatchdogSec=30
-NotifyAccess=main
-ReadWritePaths=/data /sys/kernel/config /sys/class/leds /proc/sys/vm /sys/block
-PrivateTmp=true
+**CIFS/SMB example** (Synology, Windows share, etc.):
+```toml
+[wifi]
+home_ssid = "MyHomeNetwork"
 
-[Install]
-WantedBy=multi-user.target
-EOF
+[archive]
+system = "cifs"
 
-# Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable teslausb.service
+[cifs]
+server = "192.168.1.100"
+share = "TeslaCam"
+user = "tesla"
+password = "your_password"
+```
 
-# Load USB gadget modules at boot
-echo "dtoverlay=dwc2" | sudo tee -a /boot/firmware/config.txt
-echo "modules-load=dwc2,libcomposite" | sudo tee -a /boot/firmware/cmdline.txt
+### Step 5: Reboot and Install in Car
 
-# Reboot
+```bash
 sudo reboot
 ```
 
-#### 5. Partition and Format the Tesla Drives
+After reboot, unplug the Pi from the power source and connect it to your **Tesla's glovebox USB-A port** with a data cable. The dashcam icon should appear on the Tesla touchscreen within ~10 seconds.
 
-After reboot, create the exFAT partitions for Tesla (if not already done):
+### Step 6: Verify
 
+From your home WiFi (while the car is parked):
 ```bash
-# Check your partition layout
-lsblk
+# Check the web UI
+open http://teslausb.local       # macOS
+# or visit http://teslausb.local in a browser
 
-# Format cam and music partitions as exFAT
-sudo mkfs.exfat -L cam /dev/mmcblk0p3
-sudo mkfs.exfat -L music /dev/mmcblk0p4
+# Check logs via SSH
+ssh pi@teslausb.local
+sudo journalctl -u teslausb -f
 
-# Create required folder structure on cam partition
-sudo mkdir -p /mnt/cam
-sudo mount /dev/mmcblk0p3 /mnt/cam
-sudo mkdir -p /mnt/cam/TeslaCam/RecentClips
-sudo mkdir -p /mnt/cam/TeslaCam/SavedClips
-sudo mkdir -p /mnt/cam/TeslaCam/SentryClips
-sudo umount /mnt/cam
-
-# Create Music folder on music partition
-sudo mkdir -p /mnt/music
-sudo mount /dev/mmcblk0p4 /mnt/music
-sudo mkdir -p /mnt/music/Music
-sudo umount /mnt/music
+# You should see:
+#   teslausb-neo starting
+#   USB gadget presented at X.X seconds uptime
+#   waiting for wifi
+#   connected to home wifi
+#   archiving started...
 ```
 
-#### 6. Connect to Tesla
+### Adding Music
 
-Plug the Pi Zero 2 W into the Tesla glovebox USB-A port using a **data cable** (not a charge-only cable). The dashcam icon should appear on the Tesla touchscreen within a few seconds.
+1. SSH into the Pi: `ssh pi@teslausb.local`
+2. Mount the music partition: `sudo mount /dev/mmcblk0p6 /mnt/music`
+3. Copy music files: `scp -r ~/Music/* pi@teslausb.local:/mnt/music/Music/`
+4. Unmount: `sudo umount /mnt/music`
+5. Or use the web UI at `http://teslausb.local` to upload files
 
 ## Configuration
 
