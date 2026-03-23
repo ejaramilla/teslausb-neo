@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_TESLAUSB_NEO_PATH/package/teslausb/Config.in"

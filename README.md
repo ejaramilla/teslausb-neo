@@ -61,6 +61,10 @@ Partitions p3–p6 are raw block devices presented directly to the Tesla via the
 
 ## Installation
 
+There are two install paths:
+- **Easy path (recommended):** Flash Raspberry Pi OS Lite, run the setup script. Works today, ~10 second boot.
+- **Advanced path:** Flash a custom Buildroot image from the Releases page. Minimal OS, ~4 second boot. Built automatically by GitHub Actions.
+
 ### What You Need
 
 - A Raspberry Pi Zero 2 W
@@ -176,6 +180,26 @@ sudo journalctl -u teslausb -f
 #   connected to home wifi
 #   archiving started...
 ```
+
+### Alternative: Flash the Buildroot Image (Advanced)
+
+If a pre-built Buildroot image is available on the [Releases page](https://github.com/ejaramilla/teslausb-neo/releases), you can skip Steps 1-3 entirely:
+
+1. Download `sdcard.img.xz` from the latest release
+2. Flash it:
+   ```bash
+   # macOS
+   xzcat sdcard.img.xz | sudo dd of=/dev/rdiskN bs=4m
+
+   # Linux
+   xzcat sdcard.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+   ```
+3. Mount the `data` partition on your computer, edit `teslausb.toml` with your WiFi and archive settings
+4. Eject, insert into Pi, plug into Tesla
+
+The Buildroot image is a minimal ~50 MB Linux with only what TeslaUSB Neo needs — no Raspberry Pi OS, no apt, no desktop. It boots to USB gadget in ~4 seconds. The image is built automatically by GitHub Actions on every release tag.
+
+> To trigger a new image build manually: go to Actions > "Build SD Card Image" > "Run workflow" on GitHub.
 
 ### Adding Music
 

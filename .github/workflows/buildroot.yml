@@ -1,0 +1,99 @@
+name: Build SD Card Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+env:
+  BUILDROOT_VERSION: "2024.02.10"
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout teslausb-neo
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build teslausb ARM binary
+        run: |
+          GOOS=linux GOARCH=arm GOARM=7 go build \
+            -ldflags="-s -w -X main.version=${{ github.ref_name || github.sha }}" \
+            -o buildroot/board/teslausb/rootfs_overlay/usr/bin/teslausb \
+            ./cmd/teslausb
+          chmod +x buildroot/board/teslausb/rootfs_overlay/usr/bin/teslausb
+          file buildroot/board/teslausb/rootfs_overlay/usr/bin/teslausb
+
+      - name: Install Buildroot host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential gcc g++ wget git \
+            cpio unzip rsync bc file patch gzip bzip2 \
+            perl tar findutils diffutils \
+            libncurses5-dev libssl-dev \
+            python3
+
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: buildroot-src/dl
+          key: br-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/*') }}
+          restore-keys: |
+            br-dl-${{ env.BUILDROOT_VERSION }}-
+            br-dl-
+
+      - name: Cache Buildroot ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: br-ccache-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/*') }}-${{ github.sha }}
+          restore-keys: |
+            br-ccache-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('buildroot/configs/*') }}-
+            br-ccache-${{ env.BUILDROOT_VERSION }}-
+            br-ccache-
+
+      - name: Clone Buildroot
+        run: |
+          git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} \
+            https://github.com/buildroot/buildroot.git buildroot-src
+
+      - name: Configure Buildroot
+        run: |
+          cd buildroot-src
+          make BR2_EXTERNAL=${{ github.workspace }}/buildroot teslausb_neo_defconfig
+
+      - name: Build image
+        run: |
+          cd buildroot-src
+          make -j$(nproc)
+
+      - name: Compress image
+        run: |
+          xz -9 -k buildroot-src/output/images/sdcard.img
+          ls -lh buildroot-src/output/images/sdcard.img*
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teslausb-neo-sdcard
+          path: buildroot-src/output/images/sdcard.img.xz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            buildroot-src/output/images/sdcard.img.xz
+            buildroot/board/teslausb/rootfs_overlay/usr/bin/teslausb
