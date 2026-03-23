@@ -52,14 +52,14 @@ func TestDefaultConfig(t *testing.T) {
 	}
 
 	// Tuning defaults
-	if cfg.Tuning.DirtyRatio != 80 {
-		t.Errorf("Tuning.DirtyRatio = %d, want 80", cfg.Tuning.DirtyRatio)
+	if cfg.Tuning.DirtyRatio != 10 {
+		t.Errorf("Tuning.DirtyRatio = %d, want 10", cfg.Tuning.DirtyRatio)
 	}
 	if cfg.Tuning.DirtyBackgroundBytes != 65536 {
 		t.Errorf("Tuning.DirtyBackgroundBytes = %d, want 65536", cfg.Tuning.DirtyBackgroundBytes)
 	}
-	if cfg.Tuning.CPUGovernor != "powersave" {
-		t.Errorf("Tuning.CPUGovernor = %q, want %q", cfg.Tuning.CPUGovernor, "powersave")
+	if cfg.Tuning.CPUGovernor != "conservative" {
+		t.Errorf("Tuning.CPUGovernor = %q, want %q", cfg.Tuning.CPUGovernor, "conservative")
 	}
 
 	// Health defaults

@@ -194,10 +194,10 @@ func DefaultConfig() Config {
 			SnapshotIntervalSeconds: 5,
 		},
 		Tuning: TuningConfig{
-			DirtyRatio:              80,
+			DirtyRatio:              10,
 			DirtyBackgroundBytes:    65536,
-			DirtyWritebackCentisecs: 300,
-			CPUGovernor:             "powersave",
+			DirtyWritebackCentisecs: 25,
+			CPUGovernor:             "conservative",
 			CPUGovernorArchiving:    "ondemand",
 		},
 	}
