@@ -1,0 +1,50 @@
+# TeslaUSB Neo Configuration
+# Copy this file to /data/teslausb.toml and edit with your settings.
+# Only uncomment the sections you need — all values have sensible defaults.
+
+# ─── WiFi ───────────────────────────────────────────────
+[wifi]
+home_ssid = "YourNetworkName"
+
+# Uncomment to enable AP hotspot when away from home WiFi:
+# [wifi.ap]
+# enabled = true
+# ssid = "teslausb"
+# password = "changeme123"
+
+# ─── Archive ────────────────────────────────────────────
+[archive]
+system = "cifs"          # cifs, rsync, rclone, nfs
+
+# CIFS/SMB (Windows share, Synology, etc.)
+[cifs]
+server = "192.168.1.100"
+share = "TeslaCam"
+user = "tesla"
+password = "your_password"
+
+# Uncomment for rsync over SSH instead:
+# [archive]
+# system = "rsync"
+# [rsync]
+# server = "192.168.1.100"
+# user = "tesla"
+# path = "/mnt/nas/TeslaCam"
+
+# Uncomment for rclone (Google Drive, S3, Dropbox, etc.):
+# [archive]
+# system = "rclone"
+# [rclone]
+# path = "gdrive:TeslaCam"
+
+# Uncomment for NFS:
+# [archive]
+# system = "nfs"
+# [nfs]
+# server = "192.168.1.100"
+# share = "/exports/teslacam"
+
+# ─── Notifications (optional) ──────────────────────────
+# Uncomment to get push notifications:
+# [notify.ntfy]
+# url = "https://ntfy.sh/my-teslausb-topic"
