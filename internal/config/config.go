@@ -23,6 +23,9 @@ type ArchiveConfig struct {
 	SentryClips    bool   `toml:"sentry_clips"`
 	RecentClips    bool   `toml:"recent_clips"`
 	TrackModeClips bool   `toml:"track_mode_clips"`
+	SyncMusic      bool   `toml:"sync_music"`
+	SyncLightShow  bool   `toml:"sync_lightshow"`
+	SyncBoombox    bool   `toml:"sync_boombox"`
 }
 
 // CIFSConfig defines CIFS/SMB archive target settings.

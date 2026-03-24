@@ -45,6 +45,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Archive.TrackModeClips {
 		t.Error("Archive.TrackModeClips should default to false")
 	}
+	if cfg.Archive.SyncMusic {
+		t.Error("Archive.SyncMusic should default to false")
+	}
+	if cfg.Archive.SyncLightShow {
+		t.Error("Archive.SyncLightShow should default to false")
+	}
+	if cfg.Archive.SyncBoombox {
+		t.Error("Archive.SyncBoombox should default to false")
+	}
 
 	// CIFS default path
 	if cfg.CIFS.Path != "TeslaCam" {
@@ -162,6 +171,40 @@ topic = "teslausb"
 	}
 	if cfg.Notify.Ntfy.URL != "https://ntfy.sh/my-topic" {
 		t.Errorf("Notify.Ntfy.URL = %q, want %q", cfg.Notify.Ntfy.URL, "https://ntfy.sh/my-topic")
+	}
+	// Sync flags should remain at default (false) since not set in TOML.
+	if cfg.Archive.SyncMusic {
+		t.Error("Archive.SyncMusic should be false when not set")
+	}
+}
+
+func TestLoadConfigWithMediaSync(t *testing.T) {
+	tomlContent := `
+[archive]
+system = "cifs"
+sync_music = true
+sync_lightshow = true
+sync_boombox = true
+`
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(tomlContent), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Archive.SyncMusic {
+		t.Error("Archive.SyncMusic should be true")
+	}
+	if !cfg.Archive.SyncLightShow {
+		t.Error("Archive.SyncLightShow should be true")
+	}
+	if !cfg.Archive.SyncBoombox {
+		t.Error("Archive.SyncBoombox should be true")
 	}
 }
 

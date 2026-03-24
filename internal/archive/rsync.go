@@ -65,11 +65,12 @@ func (b *RsyncBackend) ArchiveFiles(ctx context.Context, srcRoot string, files [
 	return nil
 }
 
-// SyncMusic synchronises the music library from the remote server to the
-// given mount point.
-func (b *RsyncBackend) SyncMusic(ctx context.Context, srcMount string) error {
-	src := fmt.Sprintf("%s@%s:%s/", b.user, b.server, filepath.Join(b.path, "Music"))
-	dst := filepath.Join(srcMount, "Music") + "/"
+// SyncMedia synchronises a media folder from the remote server to the given
+// mount point. mediaFolder is the root-level directory name (e.g. "Music",
+// "LightShow", "Boombox").
+func (b *RsyncBackend) SyncMedia(ctx context.Context, destMount string, mediaFolder string) error {
+	src := fmt.Sprintf("%s@%s:%s/", b.user, b.server, filepath.Join(b.path, mediaFolder))
+	dst := filepath.Join(destMount, mediaFolder) + "/"
 
 	args := []string{"-a", "--delete"}
 	if b.sshKey != "" {
@@ -79,7 +80,7 @@ func (b *RsyncBackend) SyncMusic(ctx context.Context, srcMount string) error {
 
 	cmd := exec.CommandContext(ctx, "rsync", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("rsync: music sync: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("rsync: %s sync: %s", mediaFolder, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

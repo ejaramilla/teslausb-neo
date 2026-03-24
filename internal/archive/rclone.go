@@ -62,15 +62,16 @@ func (b *RcloneBackend) ArchiveFiles(ctx context.Context, srcRoot string, files 
 	return nil
 }
 
-// SyncMusic synchronises the music library from the rclone remote to
-// the given mount point.
-func (b *RcloneBackend) SyncMusic(ctx context.Context, srcMount string) error {
-	src := fmt.Sprintf("%s%s/Music", b.drive, b.path)
-	dst := filepath.Join(srcMount, "Music")
+// SyncMedia synchronises a media folder from the rclone remote to the given
+// mount point. mediaFolder is the root-level directory name (e.g. "Music",
+// "LightShow", "Boombox").
+func (b *RcloneBackend) SyncMedia(ctx context.Context, destMount string, mediaFolder string) error {
+	src := fmt.Sprintf("%s%s/%s", b.drive, b.path, mediaFolder)
+	dst := filepath.Join(destMount, mediaFolder)
 
 	cmd := exec.CommandContext(ctx, "rclone", "sync", src, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("rclone: music sync: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("rclone: %s sync: %s", mediaFolder, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

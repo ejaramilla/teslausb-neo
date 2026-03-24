@@ -10,6 +10,7 @@ A ground-up rewrite of [TeslaUSB](https://github.com/marcone/teslausb) in Go. A 
 - Presents up to 4 USB drives to your Tesla (dashcam, music, light show, boombox)
 - USB gadget appears in **under 4 seconds** after power-on
 - Automatically archives dashcam/sentry clips to your NAS when you park at home
+- Automatically syncs music, light shows, and boombox sounds from your NAS
 - Plays music without skipping (I/O scheduler tuning prevents write starvation)
 - Repairs exFAT corruption on every archive cycle (Tesla cuts power without warning)
 - Sends notifications when archiving starts/completes (ntfy, Apprise, or 130+ services)
@@ -31,7 +32,8 @@ When parked at home (WiFi detected):
   3. Run fsck.exfat on live partition
   4. Reconnect USB gadget (Tesla resumes writing immediately)
   5. Mount snapshot read-only, rsync new files to NAS
-  6. Release snapshot, send notification
+  6. Sync media: mirror Music/, LightShow/, Boombox/ from NAS to USB
+  7. Release snapshot, send notification
 ```
 
 Raw partitions are passed directly to the USB gadget as block devices — no `.bin` image files, no XFS, no loop devices. Snapshots use Linux device-mapper with a zram-backed copy-on-write device stored entirely in RAM, so a power loss at any point causes zero on-disk corruption from the snapshot mechanism.
@@ -208,15 +210,35 @@ The Buildroot image is a minimal ~50 MB Linux with only what TeslaUSB Neo needs 
 
 > To trigger a new image build manually: go to Actions > "Build SD Card Image" > "Run workflow" on GitHub.
 
-### Adding Music
+### Adding Music, Light Shows, and Boombox Sounds
+
+**Automatic sync (recommended):** Place files on your archive server and enable sync in the config. Files are synced from your NAS every archive cycle:
+
+```toml
+[archive]
+sync_music = true       # Sync Music/ folder to music partition
+sync_lightshow = true   # Sync LightShow/ folder to lightshow partition
+sync_boombox = true     # Sync Boombox/ folder to boombox partition
+```
+
+On your archive server, create these folders alongside your TeslaCam archive:
+- `Music/` — MP3, FLAC, WAV, OGG files (subfolders for artist/album OK)
+- `LightShow/` — paired `.fseq` + `.mp3`/`.wav` files (filenames must match, e.g. `show.fseq` + `show.wav`). Audio must be 44.1 kHz sample rate.
+- `Boombox/` — `.mp3` or `.wav` custom horn sounds (max 5 selectable, alphabetical order). Filenames: alphanumeric, dashes, underscores only — no spaces.
+
+The sync mirrors these folders to the USB partitions with `--delete`, so removing a file from the server removes it from the car.
+
+**Manual copy (alternative):**
 
 1. SSH into the Pi: `ssh pi@teslausb.local`
 2. Stop the teslausb service: `sudo systemctl stop teslausb`
-3. Mount the music partition: `sudo mount /dev/mmcblk0p6 /mnt/music`
-4. Copy your music: `scp -r ~/Music/* pi@teslausb.local:/mnt/music/Music/`
+3. Mount the partition: `sudo mount /dev/mmcblk0p6 /mnt/music`
+4. Copy your files: `scp -r ~/Music/* pi@teslausb.local:/mnt/music/Music/`
 5. Unmount and restart: `sudo umount /mnt/music && sudo systemctl start teslausb`
 
-Supported formats: MP3, FLAC, WAV, OGG, M4A (ALAC). Tesla reads ID3 metadata tags.
+Supported music formats: MP3, FLAC, WAV, OGG. Tesla reads ID3 metadata tags.
+
+**Sources:** [Tesla Light Show repo](https://github.com/teslamotors/light-show), [Tesla Owner's Manual — Boombox](https://www.tesla.com/ownersmanual/models/en_us/GUID-79A49D40-A028-435B-A7F6-8E48846AB9E9.html)
 
 ## Configuration
 
@@ -302,6 +324,9 @@ saved_clips = true       # Archive SavedClips (manual saves, honk)
 sentry_clips = true      # Archive SentryClips
 recent_clips = false     # Archive RecentClips (rolling buffer)
 track_mode_clips = false # Archive TeslaTrackMode telemetry
+sync_music = false       # Mirror Music/ from server to music partition
+sync_lightshow = false   # Mirror LightShow/ from server to lightshow partition
+sync_boombox = false     # Mirror Boombox/ from server to boombox partition
 
 [cifs]
 server = "192.168.1.100"

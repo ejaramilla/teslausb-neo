@@ -16,6 +16,12 @@ home_ssid = "YourNetworkName"
 [archive]
 system = "cifs"          # cifs, rsync, rclone, nfs
 
+# Media sync: mirror these folders FROM your server TO the USB partitions.
+# Place files in Music/, LightShow/, or Boombox/ on your archive share.
+# sync_music = true      # Sync Music/ folder to music partition
+# sync_lightshow = true  # Sync LightShow/ folder (.fseq + .mp3/.wav pairs)
+# sync_boombox = true    # Sync Boombox/ folder (.mp3/.wav custom horn sounds)
+
 # CIFS/SMB (Windows share, Synology, etc.)
 [cifs]
 server = "192.168.1.100"

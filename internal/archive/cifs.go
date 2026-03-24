@@ -111,15 +111,16 @@ func (b *CIFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []
 	return nil
 }
 
-// SyncMusic synchronises the music library from the CIFS share to the
-// given mount point.
-func (b *CIFSBackend) SyncMusic(ctx context.Context, srcMount string) error {
-	src := filepath.Join(b.mountpoint, "Music") + "/"
-	dst := filepath.Join(srcMount, "Music") + "/"
+// SyncMedia synchronises a media folder from the CIFS share to the given
+// mount point. mediaFolder is the root-level directory name (e.g. "Music",
+// "LightShow", "Boombox").
+func (b *CIFSBackend) SyncMedia(ctx context.Context, destMount string, mediaFolder string) error {
+	src := filepath.Join(b.mountpoint, mediaFolder) + "/"
+	dst := filepath.Join(destMount, mediaFolder) + "/"
 
 	cmd := exec.CommandContext(ctx, "rsync", "-a", "--delete", src, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("cifs: music sync: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("cifs: %s sync: %s", mediaFolder, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

@@ -37,6 +37,8 @@ type Backend interface {
 	// progressFn may be nil.
 	ArchiveFiles(ctx context.Context, srcRoot string, files []string, progressFn ProgressFunc) error
 
-	// SyncMusic synchronises the music library from the backend to srcMount.
-	SyncMusic(ctx context.Context, srcMount string) error
+	// SyncMedia synchronises a media folder (e.g. "Music", "LightShow",
+	// "Boombox") from the backend to destMount. The folder name corresponds
+	// to the root-level directory Tesla expects on each USB partition.
+	SyncMedia(ctx context.Context, destMount string, mediaFolder string) error
 }

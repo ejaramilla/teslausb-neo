@@ -80,15 +80,16 @@ func (b *NFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []s
 	return nil
 }
 
-// SyncMusic synchronises the music library from the NFS share to the
-// given mount point.
-func (b *NFSBackend) SyncMusic(ctx context.Context, srcMount string) error {
-	src := filepath.Join(b.mountpoint, "Music") + "/"
-	dst := filepath.Join(srcMount, "Music") + "/"
+// SyncMedia synchronises a media folder from the NFS share to the given
+// mount point. mediaFolder is the root-level directory name (e.g. "Music",
+// "LightShow", "Boombox").
+func (b *NFSBackend) SyncMedia(ctx context.Context, destMount string, mediaFolder string) error {
+	src := filepath.Join(b.mountpoint, mediaFolder) + "/"
+	dst := filepath.Join(destMount, mediaFolder) + "/"
 
 	cmd := exec.CommandContext(ctx, "rsync", "-a", "--delete", src, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("nfs: music sync: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("nfs: %s sync: %s", mediaFolder, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

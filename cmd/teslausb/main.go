@@ -40,6 +40,7 @@ const (
 	StateFsck           State = "fsck"
 	StateReconnect      State = "reconnect"
 	StateArchiving      State = "archiving"
+	StateMediaSync      State = "media_sync"
 	StateCleanup        State = "cleanup"
 )
 
@@ -49,6 +50,7 @@ const (
 	lightshowPartition = "/dev/mmcblk0p5"
 	boomboxPartition   = "/dev/mmcblk0p6"
 	snapshotMountpoint = "/mnt/snap"
+	mediaMountpoint    = "/mnt/media"
 	configPath         = "/data/teslausb.toml"
 	configFallback     = "/etc/teslausb.toml"
 	dbPath             = "/data/teslausb.db"
@@ -159,6 +161,12 @@ func (sm *StateMachine) Run(ctx context.Context) error {
 		case StateArchiving:
 			if err := sm.runArchive(ctx); err != nil {
 				slog.Error("archive failed", "error", err)
+			}
+			sm.transition(StateMediaSync)
+
+		case StateMediaSync:
+			if err := sm.runMediaSync(ctx); err != nil {
+				slog.Error("media sync failed", "error", err)
 			}
 			sm.transition(StateCleanup)
 
@@ -366,6 +374,93 @@ func (sm *StateMachine) runArchive(ctx context.Context) error {
 	return nil
 }
 
+// runMediaSync deactivates the gadget, mounts each media partition, and syncs
+// content from the archive backend. This mirrors the Music/, LightShow/, and
+// Boombox/ folders from the user's server to the corresponding USB partitions.
+func (sm *StateMachine) runMediaSync(ctx context.Context) error {
+	type mediaTarget struct {
+		enabled   bool
+		partition string
+		folder    string
+	}
+	targets := []mediaTarget{
+		{sm.cfg.Archive.SyncMusic, musicPartition, "Music"},
+		{sm.cfg.Archive.SyncLightShow, lightshowPartition, "LightShow"},
+		{sm.cfg.Archive.SyncBoombox, boomboxPartition, "Boombox"},
+	}
+
+	// Check if any sync is enabled.
+	var anyEnabled bool
+	for _, t := range targets {
+		if t.enabled {
+			anyEnabled = true
+			break
+		}
+	}
+	if !anyEnabled {
+		return nil
+	}
+
+	// Connect to archive backend (may already be disconnected after runArchive).
+	if !sm.archiver.IsReachable(ctx) {
+		return fmt.Errorf("archive backend %s is not reachable for media sync", sm.archiver.Name())
+	}
+	if err := sm.archiver.Connect(ctx); err != nil {
+		return fmt.Errorf("connect for media sync: %w", err)
+	}
+	defer func() {
+		if err := sm.archiver.Disconnect(ctx); err != nil {
+			slog.Warn("failed to disconnect after media sync", "error", err)
+		}
+	}()
+
+	// Deactivate gadget so we can mount the media partitions.
+	slog.Info("deactivating gadget for media sync")
+	if err := sm.gad.Deactivate(); err != nil {
+		return fmt.Errorf("deactivate gadget for media sync: %w", err)
+	}
+	defer func() {
+		if err := sm.gad.Activate(); err != nil {
+			slog.Error("failed to reactivate gadget after media sync", "error", err)
+		}
+	}()
+
+	for _, t := range targets {
+		if !t.enabled {
+			continue
+		}
+		if _, err := os.Stat(t.partition); err != nil {
+			slog.Warn("media partition not found, skipping sync", "partition", t.partition, "folder", t.folder)
+			continue
+		}
+
+		slog.Info("syncing media", "folder", t.folder, "partition", t.partition)
+
+		mountpoint := mediaMountpoint + "/" + t.folder
+		if err := os.MkdirAll(mountpoint, 0o755); err != nil {
+			slog.Error("failed to create media mountpoint", "path", mountpoint, "error", err)
+			continue
+		}
+
+		if err := fsutil.Mount(t.partition, mountpoint, "exfat", false); err != nil {
+			slog.Error("failed to mount media partition", "partition", t.partition, "error", err)
+			continue
+		}
+
+		if err := sm.archiver.SyncMedia(ctx, mountpoint, t.folder); err != nil {
+			slog.Error("media sync failed", "folder", t.folder, "error", err)
+		} else {
+			slog.Info("media sync complete", "folder", t.folder)
+		}
+
+		if err := fsutil.Unmount(mountpoint); err != nil {
+			slog.Error("failed to unmount media partition", "mountpoint", mountpoint, "error", err)
+		}
+	}
+
+	return nil
+}
+
 // cleanupSnapshot releases the dm-snapshot and frees the zram device.
 func (sm *StateMachine) cleanupSnapshot() {
 	if sm.snap != nil {
@@ -464,7 +559,7 @@ func (n *noopBackend) Disconnect(_ context.Context) error             { return n
 func (n *noopBackend) ArchiveFiles(_ context.Context, _ string, _ []string, _ archive.ProgressFunc) error {
 	return nil
 }
-func (n *noopBackend) SyncMusic(_ context.Context, _ string) error { return nil }
+func (n *noopBackend) SyncMedia(_ context.Context, _ string, _ string) error { return nil }
 
 // noopNotifier is a no-op notifier.
 type noopNotifier struct{}

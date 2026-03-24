@@ -48,10 +48,11 @@ p4 is an extended partition container for p5-p7 (MBR 4-primary limit).
 Boot → GadgetUp → WaitingForWifi → PreArchive (idle detection)
   → Snapshot (dm-snapshot + zram) → Fsck (fsck.exfat -p)
   → Reconnect (gadget back up) → Archiving (rsync from snapshot)
+  → MediaSync (gadget down, mount+sync Music/LightShow/Boombox, gadget up)
   → Cleanup (release snapshot) → WaitingForWifi (loop)
 ```
 
-USB gadget is presented FIRST on boot before any other initialization. Tesla gadget downtime during archive = dm-snapshot setup (~100ms) + fsck time (~5-30s).
+USB gadget is presented FIRST on boot before any other initialization. Tesla gadget downtime during archive = dm-snapshot setup (~100ms) + fsck time (~5-30s). Media sync causes a second brief gadget downtime to mount and sync media partitions.
 
 ### Boot Sequence (target: <4s on Buildroot, ~10s on Pi OS Lite)
 
@@ -69,7 +70,7 @@ USB gadget is presented FIRST on boot before any other initialization. Tesla gad
 | `internal/gadget` | USB gadget via configfs: create dirs, write descriptors, add LUNs, set nofua, activate/deactivate UDC |
 | `internal/sys` | VM tuning (dirty_ratio, dirty_writeback_centisecs), BFQ scheduler, CPU governor, ZRAM setup, LED control, HDMI/BT disable |
 | `internal/state` | SQLite WAL database: archived_files, archive_sessions, health_metrics tables |
-| `internal/archive` | Backend interface + 4 implementations: CIFS (mount.cifs+rsync), rsync (SSH), rclone, NFS (mount.nfs+rsync) |
+| `internal/archive` | Backend interface + 4 implementations: CIFS (mount.cifs+rsync), rsync (SSH), rclone, NFS (mount.nfs+rsync). Supports ArchiveFiles (cam→server) and SyncMedia (server→Music/LightShow/Boombox partitions) |
 | `internal/snapshot` | dm-snapshot lifecycle: zram alloc, dmsetup create origin+snapshot, mount RO, release, validity check |
 | `internal/notify` | Notifier interface + ntfy (HTTP POST), Apprise (REST API), Multi fan-out dispatcher |
 | `internal/tesla` | WakeKeeper interface + BLE (tesla-control binary), Tessie (HTTP API), Noop |
