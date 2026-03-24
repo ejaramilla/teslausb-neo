@@ -1,0 +1,7 @@
+config BR2_PACKAGE_TESLAUSB
+	bool "teslausb"
+	help
+	  TeslaUSB Neo daemon. Single Go binary that manages USB
+	  mass storage gadget, WiFi archiving, web UI, notifications,
+	  and health monitoring for Tesla dashcam.
+	  https://github.com/ejaramilla/teslausb-neo

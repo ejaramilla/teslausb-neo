@@ -46,8 +46,6 @@ jobs:
 
       - name: Package release
         run: |
-          cp teslausb.example.toml teslausb.example.toml
-          cp setup.sh setup.sh
           tar czf teslausb-neo-${{ github.ref_name }}.tar.gz \
             teslausb-linux-arm64 \
             setup.sh \

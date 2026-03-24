@@ -1,0 +1,29 @@
+# TeslaUSB Neo - Raspberry Pi Zero 2 W boot config
+
+# Kernel
+kernel=zImage
+arm_64bit=0
+
+# USB OTG gadget mode
+dtoverlay=dwc2
+
+# Disable HDMI (headless, saves ~25mA and boot time)
+hdmi_blanking=2
+
+# Disable audio (not needed)
+dtparam=audio=off
+
+# Minimize GPU memory (headless)
+gpu_mem=16
+
+# Enable hardware watchdog
+dtparam=watchdog=on
+
+# Disable HAT/PoE probe (saves ~200ms boot time)
+force_eeprom_read=0
+
+# Disable camera auto-detect (saves boot time)
+camera_auto_detect=0
+
+# Disable display auto-detect (saves boot time)
+display_auto_detect=0
