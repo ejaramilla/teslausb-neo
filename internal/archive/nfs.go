@@ -72,10 +72,19 @@ func (b *NFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []s
 			return fmt.Errorf("nfs: mkdir for %s: %w", f, err)
 		}
 
-		cmd := exec.CommandContext(ctx, "rsync", "-a", "--remove-source-files", src, dst)
+		cmd := exec.CommandContext(ctx, "rsync", "-a", "--append-verify", "--remove-source-files", src, dst)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("nfs: rsync %s: %s", f, strings.TrimSpace(string(out)))
 		}
+	}
+	return nil
+}
+
+// ArchiveLog writes a log summary file to the NFS share root.
+func (b *NFSBackend) ArchiveLog(ctx context.Context, content []byte) error {
+	dst := filepath.Join(b.mountpoint, "teslausb.log")
+	if err := os.WriteFile(dst, content, 0o644); err != nil {
+		return fmt.Errorf("nfs: write log: %w", err)
 	}
 	return nil
 }

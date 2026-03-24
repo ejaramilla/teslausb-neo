@@ -55,6 +55,14 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Archive.SyncBoombox should default to false")
 	}
 
+	// Archive new defaults
+	if cfg.Archive.FreeSpaceReserveMB != 10240 {
+		t.Errorf("Archive.FreeSpaceReserveMB = %d, want 10240", cfg.Archive.FreeSpaceReserveMB)
+	}
+	if cfg.Archive.ArchiveLogs {
+		t.Error("Archive.ArchiveLogs should default to false")
+	}
+
 	// CIFS default path
 	if cfg.CIFS.Path != "TeslaCam" {
 		t.Errorf("CIFS.Path = %q, want %q", cfg.CIFS.Path, "TeslaCam")
@@ -98,6 +106,17 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.WiFi.AP.SSID != "teslausb" {
 		t.Errorf("WiFi.AP.SSID = %q, want %q", cfg.WiFi.AP.SSID, "teslausb")
+	}
+
+	// WiFi Watchdog defaults
+	if !cfg.WiFi.Watchdog.Enabled {
+		t.Error("WiFi.Watchdog.Enabled should default to true")
+	}
+	if cfg.WiFi.Watchdog.IntervalSeconds != 60 {
+		t.Errorf("WiFi.Watchdog.IntervalSeconds = %d, want 60", cfg.WiFi.Watchdog.IntervalSeconds)
+	}
+	if cfg.WiFi.Watchdog.MaxFailures != 5 {
+		t.Errorf("WiFi.Watchdog.MaxFailures = %d, want 5", cfg.WiFi.Watchdog.MaxFailures)
 	}
 }
 
@@ -205,6 +224,49 @@ sync_boombox = true
 	}
 	if !cfg.Archive.SyncBoombox {
 		t.Error("Archive.SyncBoombox should be true")
+	}
+}
+
+func TestLoadConfigNewFeatures(t *testing.T) {
+	tomlContent := `
+[archive]
+system = "cifs"
+free_space_reserve_mb = 20480
+archive_logs = true
+
+[wifi]
+home_ssid = "MyNetwork"
+
+[wifi.watchdog]
+enabled = false
+interval_seconds = 120
+max_failures = 10
+`
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(tomlContent), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Archive.FreeSpaceReserveMB != 20480 {
+		t.Errorf("FreeSpaceReserveMB = %d, want 20480", cfg.Archive.FreeSpaceReserveMB)
+	}
+	if !cfg.Archive.ArchiveLogs {
+		t.Error("ArchiveLogs should be true")
+	}
+	if cfg.WiFi.Watchdog.Enabled {
+		t.Error("Watchdog.Enabled should be false")
+	}
+	if cfg.WiFi.Watchdog.IntervalSeconds != 120 {
+		t.Errorf("Watchdog.IntervalSeconds = %d, want 120", cfg.WiFi.Watchdog.IntervalSeconds)
+	}
+	if cfg.WiFi.Watchdog.MaxFailures != 10 {
+		t.Errorf("Watchdog.MaxFailures = %d, want 10", cfg.WiFi.Watchdog.MaxFailures)
 	}
 }
 

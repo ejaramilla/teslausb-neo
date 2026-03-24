@@ -2,9 +2,12 @@
 package wifi
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Network represents a WiFi network discovered during scanning.
@@ -92,6 +95,83 @@ func (m *Manager) StopAP() error {
 		return fmt.Errorf("wifi: stop AP: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// IsSSIDVisible returns true if the given SSID is found in a WiFi scan.
+func (m *Manager) IsSSIDVisible(ssid string) bool {
+	for _, n := range m.ScanNetworks() {
+		if n.SSID == ssid {
+			return true
+		}
+	}
+	return false
+}
+
+// RunWatchdog monitors WiFi connectivity and attempts recovery when the home
+// network is visible but the Pi is not connected. It uses a graduated response:
+// first it tries to reconnect, then reboots after maxFailures consecutive
+// failures. It blocks until ctx is cancelled.
+func (m *Manager) RunWatchdog(ctx context.Context, homeSSID string, intervalSeconds, maxFailures int) {
+	if homeSSID == "" {
+		slog.Warn("wifi watchdog: no home SSID configured, watchdog disabled")
+		return
+	}
+
+	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	consecutiveFailures := 0
+	slog.Info("wifi watchdog started", "interval_seconds", intervalSeconds, "max_failures", maxFailures)
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("wifi watchdog stopped")
+			return
+		case <-ticker.C:
+			if m.IsConnected() && m.IsHomeNetwork(homeSSID) {
+				if consecutiveFailures > 0 {
+					slog.Info("wifi watchdog: connectivity restored", "after_failures", consecutiveFailures)
+				}
+				consecutiveFailures = 0
+				continue
+			}
+
+			// Not connected to home WiFi — check if SSID is even visible.
+			if !m.IsSSIDVisible(homeSSID) {
+				// Home network not in range; this is normal (car is away).
+				consecutiveFailures = 0
+				continue
+			}
+
+			// Home SSID is visible but we're not connected.
+			consecutiveFailures++
+			slog.Warn("wifi watchdog: home SSID visible but not connected",
+				"ssid", homeSSID,
+				"consecutive_failures", consecutiveFailures,
+				"max_failures", maxFailures)
+
+			// Graduated response: try reconnect first.
+			if err := m.ConnectToHome(homeSSID); err != nil {
+				slog.Warn("wifi watchdog: reconnect attempt failed", "error", err)
+			} else {
+				slog.Info("wifi watchdog: reconnect succeeded")
+				consecutiveFailures = 0
+				continue
+			}
+
+			// Reboot after max consecutive failures.
+			if consecutiveFailures >= maxFailures {
+				slog.Error("wifi watchdog: max failures reached, rebooting",
+					"consecutive_failures", consecutiveFailures)
+				cmd := exec.Command("systemctl", "reboot")
+				if err := cmd.Run(); err != nil {
+					slog.Error("wifi watchdog: reboot failed", "error", err)
+				}
+				return
+			}
+		}
+	}
 }
 
 // ScanNetworks returns a list of visible WiFi networks.

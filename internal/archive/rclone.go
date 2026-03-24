@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,28 @@ func (b *RcloneBackend) ArchiveFiles(ctx context.Context, srcRoot string, files 
 		if err := exec.CommandContext(ctx, "rm", "-f", src).Run(); err != nil {
 			return fmt.Errorf("rclone: remove source %s: %w", f, err)
 		}
+	}
+	return nil
+}
+
+// ArchiveLog writes a log summary file to the rclone remote.
+func (b *RcloneBackend) ArchiveLog(ctx context.Context, content []byte) error {
+	tmp, err := os.CreateTemp("", "teslausb-log-*")
+	if err != nil {
+		return fmt.Errorf("rclone: create temp log: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("rclone: write temp log: %w", err)
+	}
+	tmp.Close()
+
+	dst := fmt.Sprintf("%s%s", b.drive, b.path)
+	cmd := exec.CommandContext(ctx, "rclone", "copy", tmp.Name(), dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("rclone: log upload: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }

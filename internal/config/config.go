@@ -17,15 +17,17 @@ type GadgetConfig struct {
 
 // ArchiveConfig defines archive behavior.
 type ArchiveConfig struct {
-	System         string `toml:"system"`
-	DelaySeconds   int    `toml:"delay_seconds"`
-	SavedClips     bool   `toml:"saved_clips"`
-	SentryClips    bool   `toml:"sentry_clips"`
-	RecentClips    bool   `toml:"recent_clips"`
-	TrackModeClips bool   `toml:"track_mode_clips"`
-	SyncMusic      bool   `toml:"sync_music"`
-	SyncLightShow  bool   `toml:"sync_lightshow"`
-	SyncBoombox    bool   `toml:"sync_boombox"`
+	System             string `toml:"system"`
+	DelaySeconds       int    `toml:"delay_seconds"`
+	SavedClips         bool   `toml:"saved_clips"`
+	SentryClips        bool   `toml:"sentry_clips"`
+	RecentClips        bool   `toml:"recent_clips"`
+	TrackModeClips     bool   `toml:"track_mode_clips"`
+	SyncMusic          bool   `toml:"sync_music"`
+	SyncLightShow      bool   `toml:"sync_lightshow"`
+	SyncBoombox        bool   `toml:"sync_boombox"`
+	FreeSpaceReserveMB int64  `toml:"free_space_reserve_mb"`
+	ArchiveLogs        bool   `toml:"archive_logs"`
 }
 
 // CIFSConfig defines CIFS/SMB archive target settings.
@@ -64,10 +66,18 @@ type APConfig struct {
 	Password string `toml:"password"`
 }
 
+// WatchdogConfig defines WiFi connectivity monitoring settings.
+type WatchdogConfig struct {
+	Enabled         bool `toml:"enabled"`
+	IntervalSeconds int  `toml:"interval_seconds"`
+	MaxFailures     int  `toml:"max_failures"`
+}
+
 // WiFiConfig defines wireless network settings.
 type WiFiConfig struct {
-	HomeSSID string   `toml:"home_ssid"`
-	AP       APConfig `toml:"ap"`
+	HomeSSID string         `toml:"home_ssid"`
+	AP       APConfig       `toml:"ap"`
+	Watchdog WatchdogConfig `toml:"watchdog"`
 }
 
 // NtfyConfig defines ntfy notification settings.
@@ -157,12 +167,14 @@ func DefaultConfig() Config {
 			UseExFAT:      false,
 		},
 		Archive: ArchiveConfig{
-			System:         "cifs",
-			DelaySeconds:   60,
-			SavedClips:     true,
-			SentryClips:    true,
-			RecentClips:    false,
-			TrackModeClips: false,
+			System:             "cifs",
+			DelaySeconds:       60,
+			SavedClips:         true,
+			SentryClips:        true,
+			RecentClips:        false,
+			TrackModeClips:     false,
+			FreeSpaceReserveMB: 10240, // 10 GiB
+			ArchiveLogs:        false,
 		},
 		CIFS: CIFSConfig{
 			Path: "TeslaCam",
@@ -181,6 +193,11 @@ func DefaultConfig() Config {
 				Enabled:  false,
 				SSID:     "teslausb",
 				Password: "teslausb",
+			},
+			Watchdog: WatchdogConfig{
+				Enabled:         true,
+				IntervalSeconds: 60,
+				MaxFailures:     5,
 			},
 		},
 		Wake: WakeConfig{

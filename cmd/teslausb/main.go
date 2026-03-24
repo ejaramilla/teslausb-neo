@@ -327,6 +327,26 @@ func (sm *StateMachine) runArchive(ctx context.Context) error {
 		}
 	}()
 
+	// Check free space reserve before archiving.
+	if sm.cfg.Archive.FreeSpaceReserveMB > 0 {
+		_, free, err := fsutil.GetDiskUsage(snapshotMountpoint)
+		if err != nil {
+			slog.Warn("failed to check free space", "error", err)
+		} else {
+			reserveBytes := uint64(sm.cfg.Archive.FreeSpaceReserveMB) * 1024 * 1024
+			if free < reserveBytes {
+				slog.Warn("free space below reserve threshold, skipping archive",
+					"free_mb", free/(1024*1024),
+					"reserve_mb", sm.cfg.Archive.FreeSpaceReserveMB)
+				_ = sm.notifier.Send(ctx, "TeslaUSB",
+					fmt.Sprintf("Archive skipped: only %d MB free (reserve: %d MB)",
+						free/(1024*1024), sm.cfg.Archive.FreeSpaceReserveMB),
+					notify.EventError)
+				return nil
+			}
+		}
+	}
+
 	// Send start notification.
 	_ = sm.notifier.Send(ctx, "TeslaUSB", "Archiving started", notify.EventStart)
 
@@ -371,6 +391,24 @@ func (sm *StateMachine) runArchive(ctx context.Context) error {
 
 	sm.db.CompleteSession(sessionID, archived, 0)
 	_ = sm.notifier.Send(ctx, "TeslaUSB", fmt.Sprintf("Archived %d files", archived), notify.EventFinish)
+
+	// Archive log summary to server if enabled.
+	if sm.cfg.Archive.ArchiveLogs {
+		if la, ok := sm.archiver.(archive.LogArchiver); ok {
+			logContent := fmt.Sprintf("TeslaUSB Neo %s - Archive Summary\n"+
+				"Timestamp: %s\n"+
+				"Session ID: %d\n"+
+				"Files scanned: %d\n"+
+				"Files archived: %d\n"+
+				"Status: success\n",
+				version, time.Now().Format(time.RFC3339), sessionID,
+				len(allFiles), archived)
+			if err := la.ArchiveLog(ctx, []byte(logContent)); err != nil {
+				slog.Warn("failed to archive log", "error", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -636,6 +674,10 @@ func main() {
 	}
 
 	// Start background goroutines.
+	if cfg.WiFi.Watchdog.Enabled {
+		go wifiMgr.RunWatchdog(ctx, cfg.WiFi.HomeSSID,
+			cfg.WiFi.Watchdog.IntervalSeconds, cfg.WiFi.Watchdog.MaxFailures)
+	}
 	go healthMon.Start(ctx)
 	go func() {
 		statusCh := make(chan web.StatusInfo, 1)

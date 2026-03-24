@@ -59,7 +59,7 @@ USB gadget is presented FIRST on boot before any other initialization. Tesla gad
 1. Kernel loads `dwc2` + `libcomposite` modules via `modules-load=` cmdline param
 2. systemd starts `teslausb.service` (Type=notify, After=local-fs.target)
 3. Go binary configures USB gadget via configfs, binds raw partitions to LUNs, sets nofua=1, activates UDC
-4. Background: WiFi, health monitor, web server start in goroutines
+4. Background: WiFi watchdog, health monitor, web server start in goroutines
 
 ## Package Responsibilities
 
@@ -95,6 +95,12 @@ USB gadget is presented FIRST on boot before any other initialization. Tesla gad
 6. **dirty_ratio=10, BFQ, nofua=1** — Three-pronged approach to music skipping. Low dirty_ratio prevents large write stalls. BFQ prevents write starvation of reads. nofua allows write caching for throughput.
 
 7. **ntfy + Apprise** — ntfy native (just HTTP POST, zero dependencies). Apprise REST API covers 130+ notification backends for users who want Telegram/Discord/Pushover/etc.
+
+8. **rsync --append-verify + SSH tuning** — Dashcam files are write-once, so `--append-verify` safely resumes interrupted transfers mid-file. SSH uses `aes128-gcm` (ARMv8 hardware-accelerated) with compression disabled — Pi Zero 2 W CPU is the bottleneck, not the network.
+
+9. **Configurable free space reserve** — Archive is skipped when free space drops below threshold (default 10 GiB). Configurable via `free_space_reserve_mb` for users with large NVMe drives.
+
+10. **WiFi watchdog** — Background goroutine checks connectivity every 60s. Graduated response: reconnect first, reboot after N consecutive failures. Only triggers when home SSID is visible but connection fails (not when car is simply away from home).
 
 ## CI/CD
 

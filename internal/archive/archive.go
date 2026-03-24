@@ -18,6 +18,12 @@ var (
 // the total number of files to archive.
 type ProgressFunc func(current, total int, filename string)
 
+// LogArchiver is an optional interface backends may implement to copy a
+// log summary file to the archive destination after each session.
+type LogArchiver interface {
+	ArchiveLog(ctx context.Context, content []byte) error
+}
+
 // Backend is the interface that every archive target must implement.
 type Backend interface {
 	// Name returns a human-readable identifier for this backend (e.g. "cifs").

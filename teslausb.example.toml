@@ -12,9 +12,23 @@ home_ssid = "YourNetworkName"
 # ssid = "teslausb"
 # password = "changeme123"
 
+# WiFi watchdog: monitors connectivity and reboots if home SSID is visible
+# but connection fails repeatedly. Enabled by default.
+# [wifi.watchdog]
+# enabled = true
+# interval_seconds = 60   # Check every 60 seconds
+# max_failures = 5         # Reboot after 5 consecutive failures
+
 # ─── Archive ────────────────────────────────────────────
 [archive]
 system = "cifs"          # cifs, rsync, rclone, nfs
+
+# Free space reserve in MB. Archive is skipped if free space drops below
+# this threshold. Default: 10240 (10 GiB). Tune for large NVMe drives.
+# free_space_reserve_mb = 10240
+
+# Copy a summary log (teslausb.log) to the archive server after each session.
+# archive_logs = true
 
 # Media sync: mirror these folders FROM your server TO the USB partitions.
 # Place files in Music/, LightShow/, or Boombox/ on your archive share.

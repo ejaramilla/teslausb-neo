@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -51,16 +52,44 @@ func (b *RsyncBackend) ArchiveFiles(ctx context.Context, srcRoot string, files [
 		src := filepath.Join(srcRoot, f)
 		dst := fmt.Sprintf("%s@%s:%s", b.user, b.server, filepath.Join(b.path, f))
 
-		args := []string{"-a", "--remove-source-files", "--mkpath"}
+		args := []string{"-a", "--append-verify", "--remove-source-files", "--mkpath"}
+		sshOpts := "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
 		if b.sshKey != "" {
-			args = append(args, "-e", fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", b.sshKey))
+			sshOpts += fmt.Sprintf(" -i %s -o StrictHostKeyChecking=no", b.sshKey)
 		}
-		args = append(args, src, dst)
+		args = append(args, "-e", sshOpts, src, dst)
 
 		cmd := exec.CommandContext(ctx, "rsync", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("rsync: %s: %s", f, strings.TrimSpace(string(out)))
 		}
+	}
+	return nil
+}
+
+// ArchiveLog writes a log summary file to the remote server.
+func (b *RsyncBackend) ArchiveLog(ctx context.Context, content []byte) error {
+	tmp, err := os.CreateTemp("", "teslausb-log-*")
+	if err != nil {
+		return fmt.Errorf("rsync: create temp log: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("rsync: write temp log: %w", err)
+	}
+	tmp.Close()
+
+	dst := fmt.Sprintf("%s@%s:%s/teslausb.log", b.user, b.server, b.path)
+	sshOpts := "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
+	if b.sshKey != "" {
+		sshOpts += fmt.Sprintf(" -i %s -o StrictHostKeyChecking=no", b.sshKey)
+	}
+
+	cmd := exec.CommandContext(ctx, "rsync", "-a", "-e", sshOpts, tmp.Name(), dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("rsync: log upload: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -73,10 +102,11 @@ func (b *RsyncBackend) SyncMedia(ctx context.Context, destMount string, mediaFol
 	dst := filepath.Join(destMount, mediaFolder) + "/"
 
 	args := []string{"-a", "--delete"}
+	sshOpts := "ssh -T -c aes128-gcm@openssh.com -o Compression=no"
 	if b.sshKey != "" {
-		args = append(args, "-e", fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", b.sshKey))
+		sshOpts += fmt.Sprintf(" -i %s -o StrictHostKeyChecking=no", b.sshKey)
 	}
-	args = append(args, src, dst)
+	args = append(args, "-e", sshOpts, src, dst)
 
 	cmd := exec.CommandContext(ctx, "rsync", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {

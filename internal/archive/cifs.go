@@ -103,10 +103,19 @@ func (b *CIFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []
 			return fmt.Errorf("cifs: mkdir for %s: %w", f, err)
 		}
 
-		cmd := exec.CommandContext(ctx, "rsync", "-a", "--remove-source-files", src, dst)
+		cmd := exec.CommandContext(ctx, "rsync", "-a", "--append-verify", "--remove-source-files", src, dst)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("cifs: rsync %s: %s", f, strings.TrimSpace(string(out)))
 		}
+	}
+	return nil
+}
+
+// ArchiveLog writes a log summary file to the CIFS share root.
+func (b *CIFSBackend) ArchiveLog(ctx context.Context, content []byte) error {
+	dst := filepath.Join(b.mountpoint, "teslausb.log")
+	if err := os.WriteFile(dst, content, 0o644); err != nil {
+		return fmt.Errorf("cifs: write log: %w", err)
 	}
 	return nil
 }
