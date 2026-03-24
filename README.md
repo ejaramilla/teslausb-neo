@@ -1,5 +1,8 @@
 # TeslaUSB Neo
 
+[![CI](https://github.com/ejaramilla/teslausb-neo/actions/workflows/ci.yml/badge.svg)](https://github.com/ejaramilla/teslausb-neo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ejaramilla/teslausb-neo)](https://github.com/ejaramilla/teslausb-neo/releases/latest)
+
 A ground-up rewrite of [TeslaUSB](https://github.com/marcone/teslausb) in Go. A single 10 MB binary turns a Raspberry Pi Zero 2 W into a smart USB drive for Tesla dashcam, music, light shows, and boombox — with automatic WiFi archiving, a web UI, and zero-maintenance filesystem repair.
 
 ## What It Does
@@ -18,10 +21,9 @@ A ground-up rewrite of [TeslaUSB](https://github.com/marcone/teslausb) in Go. A 
 
 ```
 Tesla ──USB──> Pi Zero 2 W (USB gadget via configfs)
-                 ├── LUN 0: /dev/mmcblk0p3 (exFAT) ── Dashcam + Sentry + Track Mode
-                 ├── LUN 1: /dev/mmcblk0p4 (exFAT) ── Music
-                 ├── LUN 2: /dev/mmcblk0p5 (exFAT) ── Light Shows
-                 └── LUN 3: /dev/mmcblk0p6 (exFAT) ── Boombox
+                 ├── LUN 0: /dev/mmcblk0p5 (exFAT) ── Dashcam + Sentry + Track Mode
+                 ├── LUN 1: /dev/mmcblk0p6 (exFAT) ── Music
+                 └── LUN 2: /dev/mmcblk0p7 (exFAT) ── Light Shows
 
 When parked at home (WiFi detected):
   1. Wait for Tesla to stop writing (idle detection)
@@ -49,15 +51,15 @@ The Pi Zero 2 W draws ~100 mA idle — well within the Tesla glovebox USB port's
 
 | Partition | Label | Filesystem | Size | Purpose |
 |-----------|-------|------------|------|---------|
-| p0 | boot | FAT32 | 50 MB | Kernel, firmware, config.txt |
-| p1 | rootfs | ext4 | 200 MB | Read-only root (overlayfs), Go binary, systemd |
-| p2 | data | ext4 | 300 MB | SQLite database, logs, teslausb.toml config |
-| p3 | cam | exFAT | ~200 GB | Dashcam (TeslaCam/, TeslaTrackMode/) — USB LUN 0 |
-| p4 | music | exFAT | ~30 GB | Music (Music/ folder) — USB LUN 1 |
-| p5 | lightshow | exFAT | 1 GB | Light shows (LightShow/ folder) — USB LUN 2 |
-| p6 | boombox | exFAT | 100 MB | Boombox sounds (Boombox/ folder) — USB LUN 3 |
+| p1 | boot | FAT32 | 64 MB | Kernel, firmware, config.txt, cmdline.txt |
+| p2 | rootfs | ext4 | 200 MB | Read-only root (overlayfs), Go binary, systemd |
+| p3 | data | ext4 | 300 MB | SQLite database, logs, teslausb.toml config |
+| p4 | (extended) | — | — | MBR extended partition container |
+| p5 | cam | exFAT | ~200 GB | Dashcam (TeslaCam/, TeslaTrackMode/) — USB LUN 0 |
+| p6 | music | exFAT | ~30 GB | Music (Music/ folder) — USB LUN 1 |
+| p7 | lightshow | exFAT | ~1 GB | Light shows (LightShow/ folder) — USB LUN 2 |
 
-Partitions p3–p6 are raw block devices presented directly to the Tesla via the Linux USB gadget subsystem. The Pi never mounts them during normal operation — only during archiving (via a read-only dm-snapshot).
+MBR only allows 4 primary partitions, so p4 is an extended partition containing the Tesla exFAT partitions as logical volumes. The Pi never mounts p5–p7 during normal operation — they are raw block devices passed directly to the USB gadget. They are only mounted during archiving (via a read-only dm-snapshot on the cam partition).
 
 ## Installation
 
@@ -89,13 +91,18 @@ There are two install paths:
    - **Configure WiFi**: Enter your home WiFi SSID and password, select your country
 5. Click **Write** and wait for it to finish
 
-### Step 2: Build the Binary (on your Mac)
+### Step 2: Get the Binary
+
+**Option A — Download from Releases (no build tools needed):**
+
+Go to [Releases](https://github.com/ejaramilla/teslausb-neo/releases/latest) and download `teslausb-linux-arm64` and `setup.sh`.
+
+**Option B — Build from source:**
 
 ```bash
-# Install Go if you don't have it (https://go.dev/dl/)
-# Or: brew install go
+# Install Go if you don't have it: https://go.dev/dl/
+# macOS: brew install go
 
-# Clone and build
 git clone https://github.com/ejaramilla/teslausb-neo.git
 cd teslausb-neo
 make binary-arm64
@@ -183,9 +190,9 @@ sudo journalctl -u teslausb -f
 
 ### Alternative: Flash the Buildroot Image (Advanced)
 
-If a pre-built Buildroot image is available on the [Releases page](https://github.com/ejaramilla/teslausb-neo/releases), you can skip Steps 1-3 entirely:
+A pre-built minimal Buildroot image is available on the [Releases page](https://github.com/ejaramilla/teslausb-neo/releases). This skips Steps 1-3 entirely:
 
-1. Download `sdcard.img.xz` from the latest release
+1. Download `sdcard.img.xz` from the [latest release](https://github.com/ejaramilla/teslausb-neo/releases/latest)
 2. Flash it:
    ```bash
    # macOS
@@ -204,10 +211,12 @@ The Buildroot image is a minimal ~50 MB Linux with only what TeslaUSB Neo needs 
 ### Adding Music
 
 1. SSH into the Pi: `ssh pi@teslausb.local`
-2. Mount the music partition: `sudo mount /dev/mmcblk0p6 /mnt/music`
-3. Copy music files: `scp -r ~/Music/* pi@teslausb.local:/mnt/music/Music/`
-4. Unmount: `sudo umount /mnt/music`
-5. Or use the web UI at `http://teslausb.local` to upload files
+2. Stop the teslausb service: `sudo systemctl stop teslausb`
+3. Mount the music partition: `sudo mount /dev/mmcblk0p6 /mnt/music`
+4. Copy your music: `scp -r ~/Music/* pi@teslausb.local:/mnt/music/Music/`
+5. Unmount and restart: `sudo umount /mnt/music && sudo systemctl start teslausb`
+
+Supported formats: MP3, FLAC, WAV, OGG, M4A (ALAC). Tesla reads ID3 metadata tags.
 
 ## Configuration
 
@@ -411,8 +420,8 @@ This is expected and handled automatically. The system runs `fsck.exfat -p` on t
 
 If the system won't boot:
 1. Remove the SD card and mount it on another computer
-2. Run: `sudo fsck.exfat -p /dev/sdX3` (cam partition)
-3. Run: `sudo fsck.ext4 -fy /dev/sdX2` (data partition)
+2. Run: `sudo fsck.exfat -p /dev/sdX5` (cam partition, p5)
+3. Run: `sudo fsck.ext4 -fy /dev/sdX3` (data partition, p3)
 4. Reinsert and boot
 
 ### Checking logs
@@ -481,13 +490,13 @@ teslausb-neo/
 | | Original TeslaUSB | TeslaUSB Neo |
 |---|---|---|
 | **Language** | 60+ bash scripts | Single Go binary (10 MB) |
-| **Boot to USB** | 45-60 seconds | <4 seconds |
+| **Boot to USB** | 45-60 seconds | ~10s (Pi OS Lite) / ~4s (Buildroot) |
 | **Storage** | .bin image files on XFS | Raw exFAT partitions (no file-in-file) |
 | **Snapshots** | XFS reflink + loop device | dm-snapshot + zram (no disk I/O) |
 | **State tracking** | Flat text files + sort/comm | SQLite WAL database |
 | **Web server** | nginx + CGI shell scripts | Embedded Go HTTP server |
 | **Notifications** | 12 separate curl implementations | ntfy native + Apprise (130+ services) |
-| **OS** | Raspberry Pi OS (900 MB) | Buildroot custom image (~50 MB) |
+| **OS** | Raspberry Pi OS (900 MB) | Pi OS Lite (430 MB) or Buildroot (~50 MB) |
 | **Root filesystem** | Manual read-only hacks | overlayfs (built-in) |
 | **Music skipping** | Common (I/O contention) | Mitigated (BFQ + nofua + dirty_ratio tuning) |
 | **Security** | CGI path traversal vulnerabilities | filepath.Rel validation on all paths |
