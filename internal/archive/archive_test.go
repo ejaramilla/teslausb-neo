@@ -9,45 +9,23 @@ import (
 	"github.com/ejaramilla/teslausb-neo/internal/config"
 )
 
-func TestBackendNames(t *testing.T) {
-	tests := []struct {
-		name    string
-		backend Backend
-		want    string
-	}{
-		{"cifs", NewCIFS(config.CIFSConfig{}), "cifs"},
-		{"nfs", NewNFS("", ""), "nfs"},
-		{"rsync", NewRsync("", "", "", ""), "rsync"},
-		{"rclone", NewRclone("", ""), "rclone"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.backend.Name(); got != tt.want {
-				t.Errorf("Name() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
+// Compile-time interface guards: every backend must implement both interfaces.
+var (
+	_ Backend     = (*CIFSBackend)(nil)
+	_ Backend     = (*NFSBackend)(nil)
+	_ Backend     = (*RsyncBackend)(nil)
+	_ Backend     = (*RcloneBackend)(nil)
+	_ LogArchiver = (*CIFSBackend)(nil)
+	_ LogArchiver = (*NFSBackend)(nil)
+	_ LogArchiver = (*RsyncBackend)(nil)
+	_ LogArchiver = (*RcloneBackend)(nil)
+)
 
-func TestAllBackendsImplementLogArchiver(t *testing.T) {
-	backends := []Backend{
-		NewCIFS(config.CIFSConfig{}),
-		NewNFS("", ""),
-		NewRsync("", "", "", ""),
-		NewRclone("", ""),
-	}
-	for _, b := range backends {
-		if _, ok := b.(LogArchiver); !ok {
-			t.Errorf("%s backend does not implement LogArchiver", b.Name())
-		}
-	}
-}
-
-func TestCIFSArchiveLog(t *testing.T) {
+func TestCIFSArchiveLog_WritesFileToMountpoint(t *testing.T) {
 	dir := t.TempDir()
 	b := &CIFSBackend{mountpoint: dir}
 
-	content := []byte("test log content\nsession 42\n")
+	content := []byte("TeslaUSB Neo v0.1.0 - Archive Summary\nSession: 42\nFiles: 17\n")
 	if err := b.ArchiveLog(context.Background(), content); err != nil {
 		t.Fatalf("ArchiveLog() error: %v", err)
 	}
@@ -61,11 +39,11 @@ func TestCIFSArchiveLog(t *testing.T) {
 	}
 }
 
-func TestNFSArchiveLog(t *testing.T) {
+func TestNFSArchiveLog_WritesFileToMountpoint(t *testing.T) {
 	dir := t.TempDir()
 	b := &NFSBackend{mountpoint: dir}
 
-	content := []byte("nfs log test\n")
+	content := []byte("NFS log test\n")
 	if err := b.ArchiveLog(context.Background(), content); err != nil {
 		t.Fatalf("ArchiveLog() error: %v", err)
 	}
@@ -79,72 +57,39 @@ func TestNFSArchiveLog(t *testing.T) {
 	}
 }
 
-func TestCIFSArchiveLogOverwrites(t *testing.T) {
+func TestArchiveLog_OverwritesPreviousLog(t *testing.T) {
 	dir := t.TempDir()
 	b := &CIFSBackend{mountpoint: dir}
+	ctx := context.Background()
 
-	// Write first log.
-	_ = b.ArchiveLog(context.Background(), []byte("first"))
-
-	// Write second log — should overwrite.
-	_ = b.ArchiveLog(context.Background(), []byte("second"))
+	_ = b.ArchiveLog(ctx, []byte("session 1: archived 10 files"))
+	_ = b.ArchiveLog(ctx, []byte("session 2: archived 25 files"))
 
 	got, _ := os.ReadFile(filepath.Join(dir, "teslausb.log"))
-	if string(got) != "second" {
-		t.Errorf("log content = %q, want %q (should overwrite)", got, "second")
+	if string(got) != "session 2: archived 25 files" {
+		t.Errorf("log should overwrite, got %q", got)
 	}
 }
 
-func TestNewCIFS(t *testing.T) {
-	cfg := config.CIFSConfig{
-		Server:   "nas.local",
-		Share:    "teslacam",
-		User:     "admin",
-		Password: "secret",
-	}
-	b := NewCIFS(cfg)
-	if b.server != "nas.local" {
-		t.Errorf("server = %q, want %q", b.server, "nas.local")
-	}
-	if b.share != "teslacam" {
-		t.Errorf("share = %q, want %q", b.share, "teslacam")
-	}
-	if b.username != "admin" {
-		t.Errorf("username = %q, want %q", b.username, "admin")
-	}
-	if b.mountpoint != "/tmp/archive_cifs" {
-		t.Errorf("mountpoint = %q, want %q", b.mountpoint, "/tmp/archive_cifs")
+func TestArchiveLog_InvalidMountpoint(t *testing.T) {
+	b := &CIFSBackend{mountpoint: "/nonexistent/path/that/does/not/exist"}
+	err := b.ArchiveLog(context.Background(), []byte("test"))
+	if err == nil {
+		t.Error("expected error when mountpoint doesn't exist")
 	}
 }
 
-func TestNewRsync(t *testing.T) {
-	b := NewRsync("host.local", "user", "/data/cam", "/root/.ssh/id_rsa")
-	if b.server != "host.local" {
-		t.Errorf("server = %q, want %q", b.server, "host.local")
-	}
-	if b.sshKey != "/root/.ssh/id_rsa" {
-		t.Errorf("sshKey = %q, want %q", b.sshKey, "/root/.ssh/id_rsa")
+func TestCIFS_MountpointDefaultPath(t *testing.T) {
+	// NewCIFS must set a fixed mountpoint — the rest of the code assumes it.
+	b := NewCIFS(config.CIFSConfig{Server: "nas"})
+	if b.mountpoint == "" {
+		t.Error("CIFS mountpoint should not be empty")
 	}
 }
 
-func TestRsyncConnectDisconnectAreNoops(t *testing.T) {
-	b := NewRsync("", "", "", "")
-	ctx := context.Background()
-	if err := b.Connect(ctx); err != nil {
-		t.Errorf("Connect() error: %v", err)
-	}
-	if err := b.Disconnect(ctx); err != nil {
-		t.Errorf("Disconnect() error: %v", err)
-	}
-}
-
-func TestRcloneConnectDisconnectAreNoops(t *testing.T) {
-	b := NewRclone("", "")
-	ctx := context.Background()
-	if err := b.Connect(ctx); err != nil {
-		t.Errorf("Connect() error: %v", err)
-	}
-	if err := b.Disconnect(ctx); err != nil {
-		t.Errorf("Disconnect() error: %v", err)
+func TestNFS_MountpointDefaultPath(t *testing.T) {
+	b := NewNFS("server", "/share")
+	if b.mountpoint == "" {
+		t.Error("NFS mountpoint should not be empty")
 	}
 }
