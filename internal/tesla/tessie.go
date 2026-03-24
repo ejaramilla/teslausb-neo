@@ -31,7 +31,11 @@ func (t *TessieWakeKeeper) Stop(_ context.Context) error { return nil }
 // Nudge sends a single wake request to the Tessie API.
 func (t *TessieWakeKeeper) Nudge(ctx context.Context) error {
 	url := fmt.Sprintf("%s/%s/wake", tessieBaseURL, t.VIN)
+	return t.nudgeWithURL(ctx, url)
+}
 
+// nudgeWithURL sends a wake POST to the given URL. Extracted for testability.
+func (t *TessieWakeKeeper) nudgeWithURL(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return fmt.Errorf("tessie: build request: %w", err)
