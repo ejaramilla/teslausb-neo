@@ -66,8 +66,22 @@ jobs:
 
       - name: Clone Buildroot
         run: |
-          git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} \
-            https://github.com/buildroot/buildroot.git buildroot-src
+          if [ -d buildroot-src/.git ]; then
+            echo "Buildroot already cloned (from cache), fetching tag..."
+            cd buildroot-src
+            git fetch --depth 1 origin tag ${{ env.BUILDROOT_VERSION }}
+            git checkout ${{ env.BUILDROOT_VERSION }}
+          elif [ -d buildroot-src ]; then
+            echo "buildroot-src exists (from dl cache) but not a git repo, cloning into it..."
+            git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} \
+              https://github.com/buildroot/buildroot.git buildroot-src-tmp
+            mv buildroot-src/dl buildroot-src-tmp/dl 2>/dev/null || true
+            rm -rf buildroot-src
+            mv buildroot-src-tmp buildroot-src
+          else
+            git clone --depth 1 --branch ${{ env.BUILDROOT_VERSION }} \
+              https://github.com/buildroot/buildroot.git buildroot-src
+          fi
 
       - name: Configure Buildroot
         run: |
