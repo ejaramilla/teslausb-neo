@@ -75,6 +75,12 @@ func SetupZRAM(sizeMB int) error {
 		}
 	}
 
+	// Make this idempotent across restarts: the kernel rejects a disksize
+	// write on an already-initialized device ("Cannot change disksize for
+	// initialized device"). If zram0 is already set up (e.g. from a previous
+	// run of this daemon), tear it down first.
+	resetZRAM0()
+
 	// Set the disk size
 	sizeBytes := fmt.Sprintf("%d", sizeMB*1024*1024)
 	disksizePath := filepath.Join(zramModulePath, "disksize")
@@ -95,6 +101,25 @@ func SetupZRAM(sizeMB int) error {
 	}
 
 	return nil
+}
+
+// resetZRAM0 tears down /dev/zram0 if it is already initialized so that a
+// subsequent disksize write succeeds. All steps are best-effort: a fresh,
+// uninitialized device needs none of them.
+func resetZRAM0() {
+	// Stop using it as swap first (otherwise reset is busy).
+	_ = exec.Command("swapoff", "/dev/zram0").Run()
+
+	// Only reset if it actually has a non-zero disksize; resetting writes
+	// "1" to the reset node which frees memory and zeroes the disksize.
+	disksize, err := os.ReadFile(filepath.Join(zramModulePath, "disksize"))
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(string(disksize)) == "0" {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(zramModulePath, "reset"), []byte("1"), 0644)
 }
 
 // ApplyAll applies all system tuning settings from the given configuration.

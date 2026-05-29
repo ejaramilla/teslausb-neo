@@ -11,7 +11,7 @@
 #
 # The script will:
 #   - Install required packages (exfatprogs, rsync, rclone)
-#   - Create the exFAT partitions for Tesla (cam, music, lightshow, boombox)
+#   - Create the exFAT partitions for Tesla (cam, music, lightshow)
 #   - Install the teslausb binary and systemd service
 #   - Configure USB gadget modules
 #   - Optimize boot time (disable unnecessary services)
@@ -81,57 +81,74 @@ if [ -n "$BINARY_SRC" ]; then
 fi
 
 # ─── Step 3: Create data partition and Tesla partitions ─
-# Check what partitions already exist
-LAST_PART=$(lsblk -rno NAME "$BOOT_DISK" | tail -1)
-LAST_PART_NUM=${LAST_PART: -1}
+# Layout (must match cmd/teslausb/main.go partition constants and CLAUDE.md):
+#   p1 boot | p2 rootfs | p3 data(ext4,300M) | p4 extended container
+#   p5 cam(exFAT) | p6 music(exFAT,30G) | p7 lightshow(exFAT,1G)
+#
+# parted output is parsed with LC_ALL=C and machine mode (-m) to avoid locale
+# decimal separators and column-order fragility. Partition ends use 100% (never
+# the raw reported disk size, which parted rounds UP and which therefore lands
+# one MiB outside the device).
 
-if [ "$LAST_PART_NUM" -ge 6 ]; then
-    log "Partitions already exist (found p$LAST_PART_NUM). Skipping partitioning."
+# Sizes in MiB.
+DATA_SIZE=300
+MUSIC_SIZE=30720    # 30 GiB
+LIGHTSHOW_SIZE=1024 # 1 GiB
+CAM_MIN_SIZE=8192   # require at least 8 GiB for the cam partition
+
+# Idempotency: if the full TeslaUSB layout already exists, do nothing. If a
+# PARTIAL/foreign layout exists past the rootfs, refuse rather than risk
+# reformatting user data.
+if [ -b "${BOOT_DISK}p5" ] && [ -b "${BOOT_DISK}p6" ] && [ -b "${BOOT_DISK}p7" ]; then
+    log "TeslaUSB partitions (p5/p6/p7) already present. Skipping partitioning."
+elif [ -b "${BOOT_DISK}p3" ] || [ -b "${BOOT_DISK}p4" ] || [ -b "${BOOT_DISK}p5" ]; then
+    err "Found existing partition(s) past the rootfs but the TeslaUSB layout is incomplete."
+    err "Refusing to repartition to avoid destroying data. Remove p3 and higher"
+    err "manually (e.g. 'sudo parted $BOOT_DISK') and re-run this script."
+    exit 1
 else
     log "Creating partitions for TeslaUSB Neo..."
 
-    # Get the end of the last existing partition
-    LAST_END=$(parted -s "$BOOT_DISK" unit MiB print | grep "^ " | tail -1 | awk '{print $3}' | tr -d 'MiB')
+    # Disk size and end of the last existing partition (the rootfs), in MiB.
+    DISK_SIZE_MIB=$(LC_ALL=C parted -m -s "$BOOT_DISK" unit MiB print | awk -F: 'NR==2{gsub(/MiB/,"",$2); print int($2)}')
+    LAST_END=$(LC_ALL=C parted -m -s "$BOOT_DISK" unit MiB print | awk -F: '/^[0-9]+:/{gsub(/MiB/,"",$3); e=int($3)} END{print e}')
 
-    # Calculate partition layout
-    # p3: data (300 MB, ext4)
-    # p4 is extended partition (container for p5-p7)
-    # p5: cam (remainder minus music/lightshow/boombox)
-    # p6: music (30 GB)
-    # p7: lightshow + boombox (1.1 GB)
-    #
-    # Note: MBR only allows 4 primary partitions. Pi OS uses p1 (boot) and p2 (rootfs).
-    # We need p3 (data) as primary, then an extended partition for the rest.
+    if [ -z "$DISK_SIZE_MIB" ] || [ -z "$LAST_END" ]; then
+        err "Could not parse disk geometry from parted. Aborting."
+        exit 1
+    fi
 
-    DISK_SIZE_MIB=$(parted -s "$BOOT_DISK" unit MiB print | grep "Disk $BOOT_DISK" | awk '{print $3}' | tr -d 'MiB')
-
+    # Lay partitions out from the end so the cam partition absorbs the
+    # remaining space: [ data ][ cam .......... ][ music ][ lightshow ]
     DATA_START=$((LAST_END + 1))
-    DATA_END=$((DATA_START + 300))
-
+    DATA_END=$((DATA_START + DATA_SIZE))
     EXTENDED_START=$((DATA_END + 1))
-    EXTENDED_END=$((DISK_SIZE_MIB))
 
-    # Music, lightshow, boombox at the end of disk
-    BOOMBOX_SIZE=100    # MiB
-    LIGHTSHOW_SIZE=1024 # MiB
-    MUSIC_SIZE=30720    # MiB (30 GB)
-
-    BOOMBOX_END=$((DISK_SIZE_MIB))
-    BOOMBOX_START=$((BOOMBOX_END - BOOMBOX_SIZE))
-    LIGHTSHOW_END=$((BOOMBOX_START))
-    LIGHTSHOW_START=$((LIGHTSHOW_END - LIGHTSHOW_SIZE))
-    MUSIC_END=$((LIGHTSHOW_START))
-    MUSIC_START=$((MUSIC_END - MUSIC_SIZE))
-
+    LIGHTSHOW_START=$((DISK_SIZE_MIB - LIGHTSHOW_SIZE))
+    MUSIC_START=$((LIGHTSHOW_START - MUSIC_SIZE))
     CAM_START=$((EXTENDED_START + 1))
-    CAM_END=$((MUSIC_START))
+    CAM_END=$((MUSIC_START - 1))
+    CAM_SIZE=$((CAM_END - CAM_START))
 
-    log "  p3: data     ${DATA_START}-${DATA_END} MiB (300 MiB, ext4)"
-    log "  p4: extended ${EXTENDED_START}-${EXTENDED_END} MiB"
-    log "  p5: cam      ${CAM_START}-${CAM_END} MiB ($(( (CAM_END - CAM_START) / 1024 )) GiB, exFAT)"
-    log "  p6: music    ${MUSIC_START}-${MUSIC_END} MiB (30 GiB, exFAT)"
-    log "  p7: liteshw  ${LIGHTSHOW_START}-${LIGHTSHOW_END} MiB (1 GiB, exFAT)"
-    # Boombox shares p7 or we skip it to stay within MBR limits
+    # Guard: not enough room. The usual cause is Raspberry Pi OS having
+    # auto-expanded the root filesystem to fill the whole card on first boot.
+    if [ "$CAM_SIZE" -lt "$CAM_MIN_SIZE" ]; then
+        err "Not enough free space after the rootfs to create the Tesla partitions."
+        err "Free space after p2: $((DISK_SIZE_MIB - LAST_END)) MiB; need >= $((DATA_SIZE + MUSIC_SIZE + LIGHTSHOW_SIZE + CAM_MIN_SIZE)) MiB."
+        err ""
+        err "Raspberry Pi OS expands the root filesystem to fill the SD card on"
+        err "first boot. Shrink it first, e.g.:"
+        err "  sudo systemctl disable --now ... ; sudo raspi-config (Advanced > Expand) is the OPPOSITE;"
+        err "  boot a PC, open the card in GParted, and shrink partition 2 to ~8 GiB,"
+        err "  then re-run this script."
+        exit 1
+    fi
+
+    log "  p3: data     ${DATA_START}-${DATA_END} MiB (${DATA_SIZE} MiB, ext4)"
+    log "  p4: extended ${EXTENDED_START} MiB - 100%"
+    log "  p5: cam      ${CAM_START}-${CAM_END} MiB ($((CAM_SIZE / 1024)) GiB, exFAT)"
+    log "  p6: music    ${MUSIC_START}-$((LIGHTSHOW_START - 1)) MiB ($((MUSIC_SIZE / 1024)) GiB, exFAT)"
+    log "  p7: lightshow ${LIGHTSHOW_START} MiB - 100% ($((LIGHTSHOW_SIZE / 1024)) GiB, exFAT)"
 
     warn "This will create new partitions on $BOOT_DISK."
     warn "Existing partitions (boot, rootfs) will NOT be modified."
@@ -142,29 +159,48 @@ else
         exit 1
     fi
 
-    # Create partitions
+    # Create partitions. The extended container and the last logical end at
+    # 100% so we never run past the device.
     parted -s "$BOOT_DISK" mkpart primary ext4 "${DATA_START}MiB" "${DATA_END}MiB"
-    parted -s "$BOOT_DISK" mkpart extended "${EXTENDED_START}MiB" "${EXTENDED_END}MiB"
+    parted -s "$BOOT_DISK" mkpart extended "${EXTENDED_START}MiB" 100%
     parted -s "$BOOT_DISK" mkpart logical "${CAM_START}MiB" "${CAM_END}MiB"
-    parted -s "$BOOT_DISK" mkpart logical "${MUSIC_START}MiB" "${MUSIC_END}MiB"
-    parted -s "$BOOT_DISK" mkpart logical "${LIGHTSHOW_START}MiB" "${LIGHTSHOW_END}MiB"
+    parted -s "$BOOT_DISK" mkpart logical "${MUSIC_START}MiB" "$((LIGHTSHOW_START - 1))MiB"
+    parted -s "$BOOT_DISK" mkpart logical "${LIGHTSHOW_START}MiB" 100%
 
-    # Wait for kernel to recognize new partitions
+    # Wait for the kernel + udev to create the new device nodes (a fixed sleep
+    # races on slow cards).
     partprobe "$BOOT_DISK"
-    sleep 2
+    udevadm settle || true
+    for n in 3 5 6 7; do
+        for _ in $(seq 1 50); do
+            [ -b "${BOOT_DISK}p${n}" ] && break
+            sleep 0.2
+        done
+        if [ ! -b "${BOOT_DISK}p${n}" ]; then
+            err "Partition ${BOOT_DISK}p${n} did not appear after partitioning. Aborting."
+            exit 1
+        fi
+    done
 
-    # Format partitions
-    log "Formatting data partition (ext4)..."
-    mkfs.ext4 -F -L data "${BOOT_DISK}p3"
-
-    log "Formatting cam partition (exFAT)..."
-    mkfs.exfat -L cam "${BOOT_DISK}p5"
-
-    log "Formatting music partition (exFAT)..."
-    mkfs.exfat -L music "${BOOT_DISK}p6"
-
-    log "Formatting lightshow partition (exFAT)..."
-    mkfs.exfat -L lightshow "${BOOT_DISK}p7"
+    # Format. Each partition was just created empty, but guard against
+    # formatting anything that unexpectedly already holds a filesystem.
+    format_if_empty() {
+        local dev="$1" type="$2" label="$3"
+        if blkid "$dev" >/dev/null 2>&1; then
+            warn "$dev already has a filesystem; leaving it untouched."
+            return
+        fi
+        log "Formatting $label ($type)..."
+        if [ "$type" = "ext4" ]; then
+            mkfs.ext4 -F -L "$label" "$dev"
+        else
+            mkfs.exfat -L "$label" "$dev"
+        fi
+    }
+    format_if_empty "${BOOT_DISK}p3" ext4 data
+    format_if_empty "${BOOT_DISK}p5" exfat cam
+    format_if_empty "${BOOT_DISK}p6" exfat music
+    format_if_empty "${BOOT_DISK}p7" exfat lightshow
 
     log "Partitions created and formatted."
 fi
@@ -241,16 +277,37 @@ systemctl enable teslausb.service
 # ─── Step 8: Configure USB gadget modules ─────────────
 log "Configuring USB gadget kernel modules..."
 
-# Add dwc2 overlay if not present
-if ! grep -q "dtoverlay=dwc2" "$BOOT_DIR/config.txt"; then
-    echo "dtoverlay=dwc2" >> "$BOOT_DIR/config.txt"
+# Add a single [all]-scoped TeslaUSB block to config.txt. The explicit [all]
+# filter is essential: appending bare lines would inherit whatever conditional
+# filter the stock Bookworm config.txt ends in (e.g. [cm5]) and not apply to a
+# Pi Zero 2 W. For the same reason we do NOT `grep dtoverlay=dwc2` to decide
+# whether dwc2 is present — the stock config.txt has a `[cm5] dtoverlay=dwc2,
+# dr_mode=host` line that would false-positive and leave the gadget disabled.
+if ! grep -q "# TeslaUSB Neo settings" "$BOOT_DIR/config.txt"; then
+    log "Adding TeslaUSB settings to config.txt..."
+    cat >> "$BOOT_DIR/config.txt" << 'BOOTCFG'
+
+[all]
+# TeslaUSB Neo settings
+dtoverlay=dwc2,dr_mode=otg
+hdmi_blanking=2
+dtparam=audio=off
+gpu_mem=16
+dtparam=watchdog=on
+BOOTCFG
 fi
 
-# Add modules-load to cmdline.txt if not present
+# cmdline.txt is a SINGLE line. Edit only the first line; merge into an
+# existing modules-load= (a second modules-load= is ignored by the kernel).
 CMDLINE_FILE="$BOOT_DIR/cmdline.txt"
-if ! grep -q "modules-load=dwc2,libcomposite" "$CMDLINE_FILE"; then
-    sed -i 's/$/ modules-load=dwc2,libcomposite/' "$CMDLINE_FILE"
-fi
+CMDLINE=$(head -n1 "$CMDLINE_FILE")
+case "$CMDLINE" in
+    *modules-load=*dwc2*)   ;;
+    *modules-load=*)        CMDLINE=$(printf '%s' "$CMDLINE" | sed 's/modules-load=/modules-load=dwc2,libcomposite,/') ;;
+    *)                      CMDLINE="$CMDLINE modules-load=dwc2,libcomposite" ;;
+esac
+case " $CMDLINE " in *" quiet "*) ;; *) CMDLINE="$CMDLINE quiet" ;; esac
+printf '%s\n' "$CMDLINE" > "$CMDLINE_FILE"
 
 # ─── Step 9: Optimize boot time ──────────────────────
 log "Optimizing boot time..."
@@ -261,27 +318,11 @@ systemctl disable apt-daily-upgrade.timer 2>/dev/null || true
 systemctl disable man-db.timer 2>/dev/null || true
 systemctl disable triggerhappy.service 2>/dev/null || true
 
-# Disable HDMI in config.txt (saves ~25mA and boot time)
-if ! grep -q "hdmi_blanking=2" "$BOOT_DIR/config.txt"; then
-    cat >> "$BOOT_DIR/config.txt" << 'BOOTCFG'
-
-# TeslaUSB Neo optimizations
-hdmi_blanking=2
-dtparam=audio=off
-gpu_mem=16
-BOOTCFG
-fi
-
-# Add quiet to kernel cmdline for faster boot
-if ! grep -q " quiet" "$CMDLINE_FILE"; then
-    sed -i 's/$/ quiet/' "$CMDLINE_FILE"
-fi
+# (HDMI/audio/gpu_mem/watchdog overlay settings are written once to config.txt
+# under the [all] block in Step 8.)
 
 # ─── Step 10: Enable hardware watchdog ────────────────
 log "Enabling hardware watchdog..."
-if ! grep -q "dtparam=watchdog=on" "$BOOT_DIR/config.txt"; then
-    echo "dtparam=watchdog=on" >> "$BOOT_DIR/config.txt"
-fi
 
 # Configure systemd watchdog
 if ! grep -q "RuntimeWatchdogSec" /etc/systemd/system.conf; then

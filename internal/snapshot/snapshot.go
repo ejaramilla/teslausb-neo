@@ -11,6 +11,15 @@ import (
 	"strings"
 )
 
+// defaultCOWSizeMB is the zram copy-on-write size. Tesla writes sequentially
+// to free space (new blocks, not overwrites), so the actual COW capture is
+// mostly exFAT metadata and 64 MB is sufficient for a ~15 min archive window
+// (see CLAUDE.md design note #5). If the COW fills, the snapshot invalidates
+// harmlessly and the origin keeps serving the car.
+const defaultCOWSizeMB = 64
+
+const snapshotName = "teslausb-snap"
+
 // Snapshot manages a device-mapper snapshot backed by a zram COW device.
 type Snapshot struct {
 	originDevice string
@@ -24,11 +33,33 @@ type Snapshot struct {
 // It allocates a zram device for the COW layer, then creates both the
 // snapshot-origin and snapshot device-mapper targets.
 func Create(originDevice string) (*Snapshot, error) {
+	return CreateWithCOWSize(originDevice, defaultCOWSizeMB)
+}
+
+// CreateWithCOWSize is Create with a configurable COW size in megabytes.
+func CreateWithCOWSize(originDevice string, cowSizeMB int) (*Snapshot, error) {
+	if cowSizeMB <= 0 {
+		cowSizeMB = defaultCOWSizeMB
+	}
 	s := &Snapshot{
 		originDevice: originDevice,
-		snapshotName: "teslausb-snap",
-		zramSizeMB:   512,
+		snapshotName: snapshotName,
+		zramSizeMB:   cowSizeMB,
 	}
+
+	// Remove any dm devices left over from a previous (crashed) run so the
+	// create below does not fail with "device already exists".
+	Cleanup()
+
+	// On any error partway through, undo whatever we created so we don't leak
+	// dm devices / zram and so the next attempt starts clean. `s` stays valid
+	// for the deferred cleanup even when we return (nil, err).
+	ok := false
+	defer func() {
+		if !ok {
+			_ = s.Release()
+		}
+	}()
 
 	// Allocate a zram device.
 	zramID, err := s.runCmd("cat", "/sys/class/zram-control/hot_add")
@@ -63,7 +94,19 @@ func Create(originDevice string) (*Snapshot, error) {
 		return nil, fmt.Errorf("snapshot: create snapshot: %w", err)
 	}
 
+	ok = true
 	return s, nil
+}
+
+// Cleanup removes any leftover teslausb dm-snapshot devices from a previous
+// run. It is safe to call when nothing exists (errors are ignored) and is
+// used both before creating a new snapshot and during startup reconciliation.
+func Cleanup() {
+	// snapshot depends on origin, so remove it first. --retry waits out a
+	// transient "device busy".
+	run := func(args ...string) { _ = exec.Command("dmsetup", args...).Run() }
+	run("remove", "--retry", snapshotName)
+	run("remove", "--retry", snapshotName+"-origin")
 }
 
 // Mount mounts the snapshot device read-only at the given mountpoint.
@@ -84,18 +127,22 @@ func (s *Snapshot) Release() error {
 	var firstErr error
 
 	if s.mountpoint != "" {
-		if _, err := s.runCmd("umount", s.mountpoint); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("snapshot: umount: %w", err)
+		if _, err := s.runCmd("umount", s.mountpoint); err != nil {
+			// Fall back to a lazy unmount if the mount is briefly busy.
+			if _, lerr := s.runCmd("umount", "-l", s.mountpoint); lerr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("snapshot: umount: %w", err)
+			}
 		}
 		s.mountpoint = ""
 	}
 
-	// Remove snapshot before origin (order matters).
-	if _, err := s.runCmd("dmsetup", "remove", s.snapshotName); err != nil && firstErr == nil {
+	// Remove snapshot before origin (order matters). --retry waits out a
+	// transient "device busy" rather than leaking the device.
+	if _, err := s.runCmd("dmsetup", "remove", "--retry", s.snapshotName); err != nil && firstErr == nil {
 		firstErr = fmt.Errorf("snapshot: remove snapshot dm: %w", err)
 	}
 
-	if _, err := s.runCmd("dmsetup", "remove", s.snapshotName+"-origin"); err != nil && firstErr == nil {
+	if _, err := s.runCmd("dmsetup", "remove", "--retry", s.snapshotName+"-origin"); err != nil && firstErr == nil {
 		firstErr = fmt.Errorf("snapshot: remove origin dm: %w", err)
 	}
 

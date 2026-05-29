@@ -52,6 +52,10 @@ BR2_PACKAGE_AVAHI_DAEMON=y
 
 # ─── Filesystem tools ──────────────────────────────────
 BR2_PACKAGE_EXFATPROGS=y
+# parted (+ partprobe) for first-boot creation of the cam/music/lightshow
+# partitions (see teslausb-provision.service). systemd already forces a glibc
+# toolchain, so parted's locale/wchar deps are satisfied.
+BR2_PACKAGE_PARTED=y
 BR2_PACKAGE_DOSFSTOOLS=y
 BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
 BR2_PACKAGE_DOSFSTOOLS_MKFS_FAT=y
