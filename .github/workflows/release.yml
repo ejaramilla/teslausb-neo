@@ -60,14 +60,35 @@ jobs:
           git log $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD \
             --pretty=format:"- %s" >> changelog.md 2>/dev/null || echo "- Initial release" >> changelog.md
           echo "" >> changelog.md
-          echo "## Installation" >> changelog.md
-          echo "" >> changelog.md
-          echo "1. Download \`teslausb-neo-${{ github.ref_name }}.tar.gz\` below" >> changelog.md
-          echo "2. Extract: \`tar xzf teslausb-neo-${{ github.ref_name }}.tar.gz\`" >> changelog.md
-          echo "3. Flash Raspberry Pi OS Lite (64-bit) to your SD card" >> changelog.md
-          echo "4. Boot the Pi, SSH in, copy \`teslausb-linux-arm64\` and \`setup.sh\` to the Pi" >> changelog.md
-          echo "5. Run: \`sudo bash setup.sh\`" >> changelog.md
-          echo "6. Edit \`/data/teslausb.toml\`, reboot, plug into Tesla" >> changelog.md
+          cat >> changelog.md <<'MD'
+
+          ## Installation
+
+          Two install methods — pick **one**.
+
+          ### ✅ Recommended (easiest): Raspberry Pi OS Lite + setup script
+
+          Works identically on Windows, macOS, and Linux, and you configure everything over SSH — no need to read a Linux (ext4) filesystem from your computer. Best choice for most people.
+
+          1. Flash **Raspberry Pi OS Lite (64-bit)** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). In the imager's ⚙ "OS customisation", set your WiFi and enable SSH.
+          2. Download `teslausb-neo-${{ github.ref_name }}.tar.gz` below and extract it (or just grab `teslausb-linux-arm64` and `setup.sh`).
+          3. Boot the Pi, then copy the files over SSH, e.g. `scp teslausb-linux-arm64 setup.sh <user>@<pi-hostname>:`.
+          4. On the Pi: `sudo bash setup.sh`.
+          5. Edit the config over SSH (`sudo nano /data/teslausb.toml`), reboot, and plug into the Tesla.
+
+          ### ⚙ Advanced: pre-built Buildroot image (`sdcard.img.xz`)
+
+          A minimal image with the OS and daemon already baked in — boots in ~4s, no Pi OS, no setup script. Trade-off: the config lives on an **ext4** partition, which Windows/macOS can't edit without extra tooling.
+
+          1. Flash **`sdcard.img.xz`** with Raspberry Pi Imager ("Use custom") or balenaEtcher — both decompress `.xz` directly. If Windows offers to "format the disk" afterwards, click **Cancel**.
+          2. Put your settings in `/data/teslausb.toml` on the `data` (ext4) partition, using `teslausb.example.toml` as a template:
+             - **Linux:** mount the partition and edit it directly.
+             - **Windows:** mount the SD card with WSL2 (`wsl --mount`), or use an ext4 driver (Paragon / DiskGenius / Ext2Fsd).
+             - **macOS:** use an ext4-capable tool, or edit it on-device via keyboard+HDMI / serial.
+          3. Eject, insert into the Pi, and plug into the Tesla.
+
+          **Minimum config either way:** your home WiFi SSID/password and your archive server. See `teslausb.example.toml`.
+          MD
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
