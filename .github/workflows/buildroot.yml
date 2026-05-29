@@ -93,6 +93,19 @@ jobs:
           cd buildroot-src
           make -j$(nproc)
 
+      - name: Install boot-test dependencies (QEMU + mtools)
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm mtools
+
+      - name: Boot-test the image under QEMU
+        run: |
+          # Static firmware-completeness check (catches missing start*.elf /
+          # overlays the GPU firmware needs) + dynamic kernel/rootfs boot under
+          # an emulated Raspberry Pi. See scripts/qemu_boot_test.sh.
+          BOOT_TIMEOUT=180 \
+            ./scripts/qemu_boot_test.sh buildroot-src/output/images/sdcard.img
+
       - name: Compress image
         run: |
           xz -9 -k buildroot-src/output/images/sdcard.img

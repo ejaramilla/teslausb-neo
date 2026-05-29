@@ -1,5 +1,13 @@
 # TeslaUSB Neo - Raspberry Pi Zero 2 W boot config
 
+# GPU firmware. MUST be set explicitly: with gpu_mem=16 below, the boot ROM
+# would otherwise auto-select the cut-down start_cd.elf/fixup_cd.dat, which
+# Buildroot's BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI does NOT install — only
+# start.elf/fixup.dat are present. Without these two lines the Pi hangs in
+# the firmware stage and never boots. (Matches upstream config_zero2w.txt.)
+start_file=start.elf
+fixup_file=fixup.dat
+
 # Kernel
 kernel=zImage
 arm_64bit=0
