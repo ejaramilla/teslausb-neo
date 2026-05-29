@@ -51,8 +51,16 @@ func (g *Gadget) gadgetPath() string {
 
 // Configure creates the configfs directory structure for the USB gadget
 // including device descriptors, strings, and mass storage function.
+//
+// It first tears down any gadget left behind by a previous (possibly crashed)
+// run. configfs state survives a process crash, and function attributes such
+// as "stall" cannot be rewritten while the gadget is bound to a UDC (the
+// kernel returns EBUSY), so a clean teardown is required for the daemon to be
+// restart-safe.
 func (g *Gadget) Configure() error {
 	gp := g.gadgetPath()
+
+	g.teardownExisting()
 
 	if err := os.MkdirAll(gp, 0755); err != nil {
 		return fmt.Errorf("create gadget dir: %w", err)
@@ -186,6 +194,17 @@ func (g *Gadget) Activate() error {
 		return fmt.Errorf("find UDC: %w", err)
 	}
 
+	// If a UDC is already bound (e.g. we are re-activating, or a previous run
+	// left it bound), writing a new value returns EBUSY. Treat an already-bound
+	// matching UDC as success; otherwise clear it first.
+	if cur, _ := readFile(filepath.Join(gp, "UDC")); cur != "" {
+		if cur == udc {
+			g.active = true
+			return nil
+		}
+		_ = clearUDC(gp)
+	}
+
 	if err := writeFile(filepath.Join(gp, "UDC"), udc); err != nil {
 		return fmt.Errorf("write UDC: %w", err)
 	}
@@ -212,32 +231,68 @@ func (g *Gadget) Destroy() error {
 		}
 	}
 
+	g.removeConfigfsTree(g.gadgetPath())
+	g.LUNs = nil
+	return nil
+}
+
+// teardownExisting best-effort removes any pre-existing gadget at this path
+// left over from a previous run. Safe to call when no gadget exists.
+func (g *Gadget) teardownExisting() {
 	gp := g.gadgetPath()
-
-	// Remove function symlink from config
-	linkPath := filepath.Join(gp, "configs", "c.1", "mass_storage.usb0")
-	_ = os.Remove(linkPath)
-
-	// Remove LUN dirs
-	for i := range g.LUNs {
-		lunDir := filepath.Join(gp, "functions", "mass_storage.usb0", fmt.Sprintf("lun.%d", i))
-		_ = os.RemoveAll(lunDir)
+	if _, err := os.Stat(gp); err != nil {
+		return // nothing there
 	}
+	_ = clearUDC(gp)
+	g.removeConfigfsTree(gp)
+}
 
-	// Remove directories in reverse order of creation
+// removeConfigfsTree unbinds and removes the full configfs structure for the
+// gadget at gp. lun.* directories are discovered by globbing so that LUNs
+// created by a previous process (not tracked in g.LUNs) are also removed.
+// configfs requires children be removed before parents, hence the ordering.
+func (g *Gadget) removeConfigfsTree(gp string) {
+	// Unlink functions from the config first (a bound/linked function cannot
+	// be removed).
+	if links, err := filepath.Glob(filepath.Join(gp, "configs", "c.1", "*.usb0")); err == nil {
+		for _, l := range links {
+			_ = os.Remove(l)
+		}
+	}
+	// Remove all LUN directories (globbed, not just g.LUNs).
+	if luns, err := filepath.Glob(filepath.Join(gp, "functions", "mass_storage.usb0", "lun.*")); err == nil {
+		for _, l := range luns {
+			_ = os.Remove(l)
+		}
+	}
+	// Deepest-first, parents after their children. On configfs the default
+	// group dirs (functions, configs, strings) are removed implicitly with the
+	// gadget and these explicit rmdirs simply no-op; on a normal filesystem
+	// they collapse the whole tree.
 	dirsToRemove := []string{
 		filepath.Join(gp, "functions", "mass_storage.usb0"),
+		filepath.Join(gp, "functions"),
 		filepath.Join(gp, "configs", "c.1", "strings", "0x409"),
+		filepath.Join(gp, "configs", "c.1", "strings"),
 		filepath.Join(gp, "configs", "c.1"),
+		filepath.Join(gp, "configs"),
 		filepath.Join(gp, "strings", "0x409"),
+		filepath.Join(gp, "strings"),
 		gp,
 	}
 	for _, d := range dirsToRemove {
 		_ = os.Remove(d)
 	}
+}
 
-	g.LUNs = nil
-	return nil
+// clearUDC unbinds the gadget from its UDC if one is bound. Writing an empty
+// string to the UDC attribute is idempotent (no-op when already unbound).
+func clearUDC(gp string) error {
+	udcPath := filepath.Join(gp, "UDC")
+	if cur, err := readFile(udcPath); err != nil || cur == "" {
+		return nil
+	}
+	return writeFile(udcPath, "")
 }
 
 // writeFile writes a string value to a file, creating it if necessary.
@@ -262,6 +317,13 @@ func findUDC() (string, error) {
 	}
 	if len(entries) == 0 {
 		return "", fmt.Errorf("no UDC found in /sys/class/udc")
+	}
+	// Prefer a real hardware controller over a dummy_hcd test controller if
+	// both are present.
+	for _, e := range entries {
+		if !strings.Contains(e.Name(), "dummy") {
+			return e.Name(), nil
+		}
 	}
 	return entries[0].Name(), nil
 }

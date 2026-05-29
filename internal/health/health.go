@@ -5,7 +5,6 @@ package health
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/ejaramilla/teslausb-neo/internal/config"
 	"github.com/ejaramilla/teslausb-neo/internal/notify"
+	"github.com/ejaramilla/teslausb-neo/internal/sdnotify"
 )
 
 // Monitor periodically checks system health and notifies on warnings.
@@ -47,7 +47,6 @@ func (m *Monitor) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.CheckTemperature(ctx)
-			m.NotifyWatchdog()
 		}
 	}
 }
@@ -78,21 +77,14 @@ func GetStorageUsage(mountpoint string) (used, free uint64, err error) {
 	return total - freeBytes, freeBytes, nil
 }
 
-// NotifyWatchdog writes WATCHDOG=1 to the systemd notify socket
-// ($NOTIFY_SOCKET) to reset the service watchdog timer.
+// NotifyWatchdog sends a watchdog keep-alive to the systemd notify socket.
+//
+// Deprecated: watchdog pings are driven by main on a dedicated ticker at
+// WATCHDOG_USEC/2 (see internal/sdnotify); this remains for compatibility and
+// simply delegates. The health monitor's own tick must NOT be used for the
+// watchdog, since its interval (default 60s) can exceed WatchdogSec.
 func (m *Monitor) NotifyWatchdog() {
-	socketPath := os.Getenv("NOTIFY_SOCKET")
-	if socketPath == "" {
-		return
-	}
-
-	conn, err := net.Dial("unixgram", socketPath)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	_, _ = conn.Write([]byte("WATCHDOG=1"))
+	sdnotify.Watchdog()
 }
 
 // CheckTemperature reads the CPU temperature and sends a notification if

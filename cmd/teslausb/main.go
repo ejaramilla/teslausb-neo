@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/ejaramilla/teslausb-neo/internal/gadget"
 	"github.com/ejaramilla/teslausb-neo/internal/health"
 	"github.com/ejaramilla/teslausb-neo/internal/notify"
+	"github.com/ejaramilla/teslausb-neo/internal/sdnotify"
 	"github.com/ejaramilla/teslausb-neo/internal/snapshot"
 	"github.com/ejaramilla/teslausb-neo/internal/state"
 	"github.com/ejaramilla/teslausb-neo/internal/sys"
@@ -44,11 +46,23 @@ const (
 	StateCleanup        State = "cleanup"
 )
 
+// Partition layout. This MUST match the SD-card layout created by setup.sh
+// (Pi OS path) and the Buildroot provisioning step, and the table documented
+// in CLAUDE.md / README:
+//
+//	p1 FAT32 boot | p2 ext4 root | p3 ext4 DATA | p4 extended container
+//	p5 exFAT cam  | p6 exFAT music | p7 exFAT lightshow
+//
+// p3 is the ext4 /data partition (SQLite DB + config) and p4 is the MBR
+// extended-partition container — NEITHER is an exFAT Tesla partition, so the
+// cam LUN must start at p5. Binding p3 here (as an earlier version did) made
+// the daemon expose /data to the car and run fsck.exfat on an ext4 filesystem.
+// partitionConsistencyTest in main_test.go guards these against drift.
 const (
-	camPartition       = "/dev/mmcblk0p3"
-	musicPartition     = "/dev/mmcblk0p4"
-	lightshowPartition = "/dev/mmcblk0p5"
-	boomboxPartition   = "/dev/mmcblk0p6"
+	camPartition       = "/dev/mmcblk0p5"
+	musicPartition     = "/dev/mmcblk0p6"
+	lightshowPartition = "/dev/mmcblk0p7"
+	dataPartition      = "/dev/mmcblk0p3"
 	snapshotMountpoint = "/mnt/snap"
 	mediaMountpoint    = "/mnt/media"
 	configPath         = "/data/teslausb.toml"
@@ -70,8 +84,9 @@ type StateMachine struct {
 	watcher  *fswatch.Watcher
 	db       *state.DB
 
-	snap    *snapshot.Snapshot
-	startUp time.Time
+	snap      *snapshot.Snapshot
+	startUp   time.Time
+	readyOnce sync.Once
 }
 
 // CurrentState returns the current state (thread-safe).
@@ -185,13 +200,23 @@ func (sm *StateMachine) Run(ctx context.Context) error {
 
 // boot configures the USB gadget and presents it to Tesla as fast as possible.
 func (sm *StateMachine) boot() error {
+	// Reconcile any kernel state left behind by a previous (possibly crashed)
+	// run before we reconfigure. The service is Restart=always, so leftover
+	// mounts / dm-snapshot devices / zram / a bound gadget would otherwise
+	// cause EBUSY failures. gadget.Configure() tears down a stale gadget;
+	// here we clear the snapshot/media mounts and dm-snapshot devices.
+	_ = fsutil.Unmount(snapshotMountpoint)
+	snapshot.Cleanup()
+
 	sm.gad = gadget.New("teslausb")
 
 	if err := sm.gad.Configure(); err != nil {
 		return fmt.Errorf("gadget configure: %w", err)
 	}
 
-	// Add LUNs for each partition that exists.
+	// Add LUNs for each partition that exists. Boombox is not a separate
+	// partition — its custom sounds live in a Boombox/ folder on the
+	// lightshow drive (see runMediaSync).
 	partitions := []struct {
 		device string
 		label  string
@@ -199,7 +224,6 @@ func (sm *StateMachine) boot() error {
 		{camPartition, "TeslaUSB CAM"},
 		{musicPartition, "TeslaUSB MUSIC"},
 		{lightshowPartition, "TeslaUSB LIGHTSHOW"},
-		{boomboxPartition, "TeslaUSB BOOMBOX"},
 	}
 	for _, p := range partitions {
 		if _, err := os.Stat(p.device); err == nil {
@@ -222,6 +246,9 @@ func (sm *StateMachine) boot() error {
 
 	elapsed := time.Since(sm.startUp).Seconds()
 	slog.Info(fmt.Sprintf("USB gadget presented at %.1f seconds uptime", elapsed))
+
+	// Tell systemd we're up (Type=notify). Once is enough even if boot retries.
+	sm.readyOnce.Do(sdnotify.Ready)
 	return nil
 }
 
@@ -416,26 +443,35 @@ func (sm *StateMachine) runArchive(ctx context.Context) error {
 // content from the archive backend. This mirrors the Music/, LightShow/, and
 // Boombox/ folders from the user's server to the corresponding USB partitions.
 func (sm *StateMachine) runMediaSync(ctx context.Context) error {
+	// Each target maps a server folder to a partition and an optional
+	// subdirectory on that partition. Boombox shares the lightshow partition
+	// (Tesla reads LightShow/ and Boombox/ from the same drive), so it is a
+	// subfolder rather than its own partition.
 	type mediaTarget struct {
 		enabled   bool
 		partition string
-		folder    string
+		folder    string // server-side folder name
+		subdir    string // subdirectory on the partition ("" = root)
 	}
 	targets := []mediaTarget{
-		{sm.cfg.Archive.SyncMusic, musicPartition, "Music"},
-		{sm.cfg.Archive.SyncLightShow, lightshowPartition, "LightShow"},
-		{sm.cfg.Archive.SyncBoombox, boomboxPartition, "Boombox"},
+		{sm.cfg.Archive.SyncMusic, musicPartition, "Music", ""},
+		{sm.cfg.Archive.SyncLightShow, lightshowPartition, "LightShow", ""},
+		{sm.cfg.Archive.SyncBoombox, lightshowPartition, "Boombox", "Boombox"},
 	}
 
-	// Check if any sync is enabled.
-	var anyEnabled bool
+	// Group enabled targets by partition so each partition is mounted once.
+	byPartition := map[string][]mediaTarget{}
+	var order []string
 	for _, t := range targets {
-		if t.enabled {
-			anyEnabled = true
-			break
+		if !t.enabled {
+			continue
 		}
+		if _, seen := byPartition[t.partition]; !seen {
+			order = append(order, t.partition)
+		}
+		byPartition[t.partition] = append(byPartition[t.partition], t)
 	}
-	if !anyEnabled {
+	if len(order) == 0 {
 		return nil
 	}
 
@@ -463,32 +499,39 @@ func (sm *StateMachine) runMediaSync(ctx context.Context) error {
 		}
 	}()
 
-	for _, t := range targets {
-		if !t.enabled {
-			continue
-		}
-		if _, err := os.Stat(t.partition); err != nil {
-			slog.Warn("media partition not found, skipping sync", "partition", t.partition, "folder", t.folder)
+	for _, partition := range order {
+		if _, err := os.Stat(partition); err != nil {
+			slog.Warn("media partition not found, skipping sync", "partition", partition)
 			continue
 		}
 
-		slog.Info("syncing media", "folder", t.folder, "partition", t.partition)
-
-		mountpoint := mediaMountpoint + "/" + t.folder
+		// Mount point name derived from the device node (e.g. mmcblk0p6).
+		mountpoint := mediaMountpoint + "/" + filepath.Base(partition)
 		if err := os.MkdirAll(mountpoint, 0o755); err != nil {
 			slog.Error("failed to create media mountpoint", "path", mountpoint, "error", err)
 			continue
 		}
 
-		if err := fsutil.Mount(t.partition, mountpoint, "exfat", false); err != nil {
-			slog.Error("failed to mount media partition", "partition", t.partition, "error", err)
+		if err := fsutil.Mount(partition, mountpoint, "exfat", false); err != nil {
+			slog.Error("failed to mount media partition", "partition", partition, "error", err)
 			continue
 		}
 
-		if err := sm.archiver.SyncMedia(ctx, mountpoint, t.folder); err != nil {
-			slog.Error("media sync failed", "folder", t.folder, "error", err)
-		} else {
-			slog.Info("media sync complete", "folder", t.folder)
+		for _, t := range byPartition[partition] {
+			dest := mountpoint
+			if t.subdir != "" {
+				dest = mountpoint + "/" + t.subdir
+				if err := os.MkdirAll(dest, 0o755); err != nil {
+					slog.Error("failed to create media subdir", "path", dest, "error", err)
+					continue
+				}
+			}
+			slog.Info("syncing media", "folder", t.folder, "partition", partition)
+			if err := sm.archiver.SyncMedia(ctx, dest, t.folder); err != nil {
+				slog.Error("media sync failed", "folder", t.folder, "error", err)
+			} else {
+				slog.Info("media sync complete", "folder", t.folder)
+			}
 		}
 
 		if err := fsutil.Unmount(mountpoint); err != nil {
@@ -679,6 +722,26 @@ func main() {
 			cfg.WiFi.Watchdog.IntervalSeconds, cfg.WiFi.Watchdog.MaxFailures)
 	}
 	go healthMon.Start(ctx)
+
+	// Answer the systemd watchdog on its own ticker at WATCHDOG_USEC/2. This
+	// is independent of the (slower) health-check interval; pinging on the
+	// health tick risked exceeding WatchdogSec and being killed in a loop.
+	if wdInterval := sdnotify.WatchdogInterval(); wdInterval > 0 {
+		go func() {
+			t := time.NewTicker(wdInterval)
+			defer t.Stop()
+			sdnotify.Watchdog()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					sdnotify.Watchdog()
+				}
+			}
+		}()
+	}
+
 	go func() {
 		statusCh := make(chan web.StatusInfo, 1)
 		srv := web.NewServer(web.Config{ArchiveDir: snapshotMountpoint}, nil, statusCh)

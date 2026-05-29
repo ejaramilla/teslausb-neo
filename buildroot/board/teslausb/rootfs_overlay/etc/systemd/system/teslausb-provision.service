@@ -1,0 +1,16 @@
+[Unit]
+Description=TeslaUSB Neo first-boot partition provisioning
+DefaultDependencies=no
+After=local-fs.target
+Before=teslausb.service
+# Only run when the cam partition has not been created yet.
+ConditionPathExists=!/dev/mmcblk0p5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/teslausb-provision.sh
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=teslausb.service
