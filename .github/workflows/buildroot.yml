@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - 'v*'
+  # Run the build + QEMU boot-test as a PR check whenever boot-relevant code
+  # changes, so a boot regression is caught before merge — not only at release
+  # time. Doc-only / unrelated PRs skip the (~slow) image build via the paths
+  # filter. The "Attach to release" step stays tag-gated below.
+  pull_request:
+    branches: [master]
+    paths:
+      - 'buildroot/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'scripts/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/buildroot.yml'
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 permissions:
