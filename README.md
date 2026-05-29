@@ -210,6 +210,41 @@ The Buildroot image is a minimal ~50 MB Linux with only what TeslaUSB Neo needs 
 
 > To trigger a new image build manually: go to Actions > "Build SD Card Image" > "Run workflow" on GitHub.
 
+### Boot testing & Raspberry Pi emulation
+
+Every Buildroot image is boot-tested in CI before it is published, and you can
+run the same checks locally:
+
+```bash
+# Needs: qemu-system-arm, mtools, python3   (macOS: brew install qemu mtools)
+./scripts/qemu_boot_test.sh path/to/sdcard.img        # full: firmware check + QEMU boot
+SKIP_QEMU=1 ./scripts/qemu_boot_test.sh sdcard.img    # firmware-completeness check only
+```
+
+There are two layers, because a Raspberry Pi boots in two stages:
+
+1. **`scripts/check_boot_files.py` — firmware-stage check (static).** The Pi's
+   GPU firmware (`bootcode.bin` → `start*.elf`) runs *before* any CPU emulator
+   is involved, so a missing or mis-selected firmware file gives a board that
+   "builds fine but never boots" with no output — and no CPU emulator can catch
+   it. This script parses `config.txt`/`cmdline.txt`, works out exactly which
+   firmware/kernel/overlay files the firmware will load, and verifies each one
+   is present on the boot partition.
+
+2. **`scripts/qemu_boot_test.sh` — kernel/userspace boot (dynamic).** Extracts
+   the kernel + device tree from the image (via `mtools`, no root needed) and
+   boots them under an emulated Pi (`qemu-system-arm -M raspi2b`, which matches
+   the 32-bit ARMv7 `zImage`), then watches the serial console for systemd and
+   the `teslausb` service coming up.
+
+> **Historical note:** the first Buildroot images would not boot on real
+> hardware. `config.txt` set `gpu_mem=16` without specifying `start_file`, so
+> the firmware tried to load the cut-down `start_cd.elf`/`fixup_cd.dat` — which
+> Buildroot's `BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI` does not ship (only
+> `start.elf`/`fixup.dat`). The fix was to pin `start_file=start.elf` /
+> `fixup_file=fixup.dat`; `check_boot_files.py` now guards against any
+> recurrence of this class of bug.
+
 ### Adding Music, Light Shows, and Boombox Sounds
 
 **Automatic sync (recommended):** Place files on your archive server and enable sync in the config. Files are synced from your NAS every archive cycle:
