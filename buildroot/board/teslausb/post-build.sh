@@ -31,6 +31,18 @@ if [ -f "${TARGET_DIR}/etc/systemd/system.conf" ]; then
         "${TARGET_DIR}/etc/systemd/system.conf"
 fi
 
+# Enable NTP. The Pi Zero 2 W has no RTC, so without this the clock boots at
+# the epoch and breaks TLS to notification services. Enabling via a symlink
+# (rather than relying on systemd presets) makes it deterministic. The unit
+# lives in /usr/lib/systemd/system on Buildroot.
+if [ -f "${TARGET_DIR}/usr/lib/systemd/system/systemd-timesyncd.service" ]; then
+    mkdir -p "${TARGET_DIR}/etc/systemd/system/sysinit.target.wants"
+    ln -sf ../../../../usr/lib/systemd/system/systemd-timesyncd.service \
+        "${TARGET_DIR}/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+else
+    echo "WARNING: systemd-timesyncd.service not found; NTP will not be enabled" >&2
+fi
+
 # Set up serial console on tty1 (standard Buildroot Pi pattern)
 if [ -e "${TARGET_DIR}/etc/inittab" ]; then
     grep -qE '^tty1::' "${TARGET_DIR}/etc/inittab" || \

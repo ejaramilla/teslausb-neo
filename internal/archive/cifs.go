@@ -17,6 +17,7 @@ type CIFSBackend struct {
 	share           string
 	username        string
 	password        string
+	path            string
 	mountpoint      string
 	credentialsFile string
 }
@@ -28,8 +29,16 @@ func NewCIFS(cfg config.CIFSConfig) *CIFSBackend {
 		share:      cfg.Share,
 		username:   cfg.User,
 		password:   cfg.Password,
+		path:       cfg.Path,
 		mountpoint: "/tmp/archive_cifs",
 	}
+}
+
+// archiveRoot is the destination directory for dashcam files: the mounted
+// share plus the configured subpath (cfg.Path, e.g. "TeslaCam"). Media sync
+// (Music/LightShow) deliberately stays at the share root, not under this path.
+func (b *CIFSBackend) archiveRoot() string {
+	return filepath.Join(b.mountpoint, b.path)
 }
 
 func (b *CIFSBackend) Name() string { return "cifs" }
@@ -97,7 +106,7 @@ func (b *CIFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []
 		}
 
 		src := filepath.Join(srcRoot, f)
-		dst := filepath.Join(b.mountpoint, f)
+		dst := filepath.Join(b.archiveRoot(), f)
 
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return fmt.Errorf("cifs: mkdir for %s: %w", f, err)
@@ -111,9 +120,12 @@ func (b *CIFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []
 	return nil
 }
 
-// ArchiveLog writes a log summary file to the CIFS share root.
+// ArchiveLog writes a log summary file alongside the archived footage.
 func (b *CIFSBackend) ArchiveLog(ctx context.Context, content []byte) error {
-	dst := filepath.Join(b.mountpoint, "teslausb.log")
+	if err := os.MkdirAll(b.archiveRoot(), 0o755); err != nil {
+		return fmt.Errorf("cifs: mkdir for log: %w", err)
+	}
+	dst := filepath.Join(b.archiveRoot(), "teslausb.log")
 	if err := os.WriteFile(dst, content, 0o644); err != nil {
 		return fmt.Errorf("cifs: write log: %w", err)
 	}

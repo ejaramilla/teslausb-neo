@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -40,6 +41,12 @@ type SessionInfo struct {
 // Config holds web server configuration.
 type Config struct {
 	ArchiveDir string
+
+	// AuthUser and AuthPass, when both non-empty, enable HTTP basic auth on
+	// every route. The UI can delete footage, so leaving these empty exposes
+	// that to anyone on the network — main surfaces it as a startup warning.
+	AuthUser string
+	AuthPass string
 }
 
 // StateDB is the interface the web server requires for state persistence.
@@ -85,15 +92,40 @@ func (s *Server) Start(addr string) error {
 		go s.consumeStatus()
 	}
 
-	slog.Info("web server starting", "addr", addr)
+	slog.Info("web server starting", "addr", addr, "auth", s.config.AuthUser != "" && s.config.AuthPass != "")
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      s.mux,
+		Handler:      s.handler(),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	return srv.ListenAndServe()
+}
+
+// handler returns the mux wrapped in basic-auth middleware when credentials
+// are configured, otherwise the bare mux.
+func (s *Server) handler() http.Handler {
+	if s.config.AuthUser == "" || s.config.AuthPass == "" {
+		return s.mux
+	}
+	return s.basicAuth(s.mux)
+}
+
+// basicAuth enforces HTTP basic authentication using a constant-time
+// comparison to avoid leaking credentials via timing.
+func (s *Server) basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(s.config.AuthUser)) == 1
+		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(s.config.AuthPass)) == 1
+		if !ok || !userMatch || !passMatch {
+			w.Header().Set("WWW-Authenticate", `Basic realm="teslausb"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) registerRoutes() {

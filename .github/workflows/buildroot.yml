@@ -107,6 +107,13 @@ jobs:
           cd buildroot-src
           make -j$(nproc)
 
+      - name: Verify runtime-required kernel options
+        run: |
+          # Catches a build that "succeeds" but ships a kernel that cannot
+          # mount exFAT, create a dm-snapshot, or present the USB gadget.
+          python3 scripts/check_kernel_config.py \
+            "buildroot-src/output/build/linux-*/.config"
+
       - name: Install boot-test dependencies (QEMU + mtools)
         run: |
           sudo apt-get install -y --no-install-recommends \

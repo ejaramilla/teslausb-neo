@@ -13,6 +13,48 @@ type mockStateDB struct {
 	sessions []SessionInfo
 }
 
+func TestBasicAuth_DisabledWhenUnset(t *testing.T) {
+	srv := NewServer(Config{ArchiveDir: t.TempDir()}, &mockStateDB{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	rec := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusUnauthorized {
+		t.Error("requests should not require auth when credentials are unset")
+	}
+}
+
+func TestBasicAuth_RejectsMissingAndWrongCredentials(t *testing.T) {
+	srv := NewServer(Config{ArchiveDir: t.TempDir(), AuthUser: "admin", AuthPass: "secret"}, &mockStateDB{}, nil)
+
+	// No credentials.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	rec := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("missing creds: code = %d, want 401", rec.Code)
+	}
+
+	// Wrong password.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.SetBasicAuth("admin", "wrong")
+	rec = httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong password: code = %d, want 401", rec.Code)
+	}
+}
+
+func TestBasicAuth_AllowsCorrectCredentials(t *testing.T) {
+	srv := NewServer(Config{ArchiveDir: t.TempDir(), AuthUser: "admin", AuthPass: "secret"}, &mockStateDB{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.SetBasicAuth("admin", "secret")
+	rec := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusUnauthorized {
+		t.Error("correct credentials should be accepted")
+	}
+}
+
 func (m *mockStateDB) GetCurrentState() string {
 	return m.state
 }

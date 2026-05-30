@@ -7,7 +7,7 @@ A ground-up rewrite of [TeslaUSB](https://github.com/marcone/teslausb) in Go. A 
 
 ## What It Does
 
-- Presents up to 4 USB drives to your Tesla (dashcam, music, light show, boombox)
+- Presents up to 3 USB drives to your Tesla (dashcam, music, light show — boombox sounds ride on the light show drive)
 - USB gadget appears in **under 4 seconds** after power-on
 - Automatically archives dashcam/sentry clips to your NAS when you park at home
 - Automatically syncs music, light shows, and boombox sounds from your NAS
@@ -145,12 +145,13 @@ make binary-arm64
 sudo nano /data/teslausb.toml
 ```
 
-At minimum, set your WiFi SSID and archive server. See [Configuration](#configuration) for examples.
+At minimum, set your WiFi network and archive server. See [Configuration](#configuration) for examples.
 
 **CIFS/SMB example** (Synology, Windows share, etc.):
 ```toml
 [wifi]
 home_ssid = "MyHomeNetwork"
+home_password = "MyWiFiPassword"   # omit only if WiFi was seeded by Pi Imager
 
 [archive]
 system = "cifs"
@@ -160,6 +161,7 @@ server = "192.168.1.100"
 share = "TeslaCam"
 user = "tesla"
 password = "your_password"
+# path = ""    # write to the share root instead of a TeslaCam/ subfolder
 ```
 
 ### Step 5: Reboot and Install in Car
@@ -203,7 +205,7 @@ A pre-built minimal Buildroot image is available on the [Releases page](https://
    # Linux
    xzcat sdcard.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
    ```
-3. Mount the `data` partition on your computer, edit `teslausb.toml` with your WiFi and archive settings
+3. Mount the `data` partition on your computer and edit `teslausb.toml`. Set **both** `home_ssid` and `home_password` under `[wifi]` (the Buildroot image has no Raspberry Pi Imager step, so the daemon creates the NetworkManager connection from these on first boot), plus your archive settings.
 4. Eject, insert into Pi, plug into Tesla
 
 The Buildroot image is a minimal ~50 MB Linux with only what TeslaUSB Neo needs — no Raspberry Pi OS, no apt, no desktop. It boots to USB gadget in ~4 seconds. The image is built automatically by GitHub Actions on every release tag.
@@ -264,7 +266,7 @@ There are two layers, because a Raspberry Pi boots in two stages:
 [archive]
 sync_music = true       # Sync Music/ folder to music partition
 sync_lightshow = true   # Sync LightShow/ folder to lightshow partition
-sync_boombox = true     # Sync Boombox/ folder to boombox partition
+sync_boombox = true     # Sync Boombox/ folder onto the lightshow partition
 ```
 
 On your archive server, create these folders alongside your TeslaCam archive:
@@ -372,7 +374,7 @@ recent_clips = false     # Archive RecentClips (rolling buffer)
 track_mode_clips = false # Archive TeslaTrackMode telemetry
 sync_music = false       # Mirror Music/ from server to music partition
 sync_lightshow = false   # Mirror LightShow/ from server to lightshow partition
-sync_boombox = false     # Mirror Boombox/ from server to boombox partition
+sync_boombox = false     # Mirror Boombox/ from server onto the lightshow partition
 
 [cifs]
 server = "192.168.1.100"
@@ -403,8 +405,9 @@ url = "http://localhost:8000/notify"   # Apprise REST API (optional)
 
 # ─── Tesla Wake ─────────────────────────────────────────
 [wake]
-method = "none"          # none, ble, tessie
+method = "none"          # none, ble, tessie, webhook
 ble_vin = ""             # Your Tesla VIN (for BLE wake)
+webhook_url = ""         # POSTed {"action":"start|stop|nudge"} (method = webhook)
 
 [wake.tessie]
 token = ""               # Tessie API token
@@ -420,7 +423,6 @@ interval_seconds = 60    # Check interval
 [idle]
 write_threshold_bytes = 1024  # Below this = idle
 timeout_seconds = 300         # Max wait for idle
-snapshot_interval_seconds = 5 # Snapshot frequency
 
 # ─── System Tuning ──────────────────────────────────────
 [tuning]
@@ -430,15 +432,17 @@ dirty_writeback_centisecs = 25 # Flush interval (250ms)
 cpu_governor = "conservative"  # Normal operation
 cpu_governor_archiving = "ondemand"  # During archive transfers
 
-# ─── Gadget Sizes ───────────────────────────────────────
-# These are only used during initial SD card setup.
-# After partitioning, sizes are fixed by the partition table.
-[gadget]
-cam_size = "200G"
-music_size = "30G"
-lightshow_size = "1G"
-boombox_size = "100M"
+# ─── Web UI auth (optional, recommended) ───────────────
+# The web UI can delete footage. Set both to require HTTP basic auth.
+[web]
+username = ""
+password = ""
 ```
+
+> **Partition sizes** are not set here — they are fixed when the partitions are
+> created. On the Pi OS path edit the size constants near the top of `setup.sh`;
+> on the Buildroot path they are set in `teslausb-provision.sh`. The data the
+> daemon reads from `teslausb.toml` cannot resize an already-partitioned card.
 
 ## Web UI
 

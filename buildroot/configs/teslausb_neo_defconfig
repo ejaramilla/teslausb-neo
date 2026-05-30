@@ -28,6 +28,10 @@ BR2_LINUX_KERNEL_DEFCONFIG="bcm2709"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="bcm2710-rpi-zero-2-w"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+# Pin the runtime-required kernel options (USB gadget, exFAT, dm-snapshot,
+# zram) so a successful build cannot ship a runtime-broken kernel. Verified
+# post-build by scripts/check_kernel_config.py.
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_TESLAUSB_NEO_PATH)/board/teslausb/linux.fragment"
 
 # ─── Raspberry Pi firmware (from upstream) ──────────────
 BR2_PACKAGE_RPI_FIRMWARE=y
@@ -42,9 +46,18 @@ BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
 BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y
 
 # ─── WiFi management ───────────────────────────────────
+# NetworkManager auto-selects wpa_supplicant, but we pin it (and the nl80211
+# driver) explicitly: WiFi is load-bearing here, so the dependency should be
+# visible rather than implicit.
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_NETWORKMANAGER=y
+
+# ─── Time sync (REQUIRED — Pi Zero 2 W has no RTC) ─────
+# Without NTP the clock boots at the epoch, which breaks TLS to ntfy/Apprise/
+# Tessie ("certificate is not yet valid") and skews archive timestamps.
+# post-build.sh enables the service; timesyncd persists last-known time.
+BR2_PACKAGE_SYSTEMD_TIMESYNCD=y
 
 # ─── mDNS (teslausb.local) ─────────────────────────────
 BR2_PACKAGE_AVAHI=y

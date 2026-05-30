@@ -3,28 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-
-	// Gadget defaults
-	if cfg.Gadget.CamSize != "16G" {
-		t.Errorf("CamSize = %q, want %q", cfg.Gadget.CamSize, "16G")
-	}
-	if cfg.Gadget.MusicSize != "0" {
-		t.Errorf("MusicSize = %q, want %q", cfg.Gadget.MusicSize, "0")
-	}
-	if cfg.Gadget.LightshowSize != "0" {
-		t.Errorf("LightshowSize = %q, want %q", cfg.Gadget.LightshowSize, "0")
-	}
-	if cfg.Gadget.BoomboxSize != "0" {
-		t.Errorf("BoomboxSize = %q, want %q", cfg.Gadget.BoomboxSize, "0")
-	}
-	if cfg.Gadget.UseExFAT {
-		t.Error("UseExFAT should default to false")
-	}
 
 	// Archive defaults
 	if cfg.Archive.System != "cifs" {
@@ -63,9 +47,12 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Archive.ArchiveLogs should default to false")
 	}
 
-	// CIFS default path
+	// Default path is honored by all four backends.
 	if cfg.CIFS.Path != "TeslaCam" {
 		t.Errorf("CIFS.Path = %q, want %q", cfg.CIFS.Path, "TeslaCam")
+	}
+	if cfg.NFS.Path != "TeslaCam" {
+		t.Errorf("NFS.Path = %q, want %q", cfg.NFS.Path, "TeslaCam")
 	}
 
 	// Tuning defaults
@@ -122,21 +109,20 @@ func TestDefaultConfig(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	tomlContent := `
-[gadget]
-cam_size = "32G"
-music_size = "4G"
-use_exfat = true
-
 [archive]
 system = "rsync"
 delay_seconds = 120
 saved_clips = false
 
-[cifs]
+[rsync]
 server = "nas.local"
-share = "teslacam"
 user = "admin"
-password = "secret"
+path = "/mnt/tank/TeslaCam"
+
+[wifi]
+home_ssid = "MyNetwork"
+home_password = "hunter2"
+hidden = true
 
 [tuning]
 dirty_ratio = 50
@@ -158,15 +144,6 @@ topic = "teslausb"
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.Gadget.CamSize != "32G" {
-		t.Errorf("CamSize = %q, want %q", cfg.Gadget.CamSize, "32G")
-	}
-	if cfg.Gadget.MusicSize != "4G" {
-		t.Errorf("MusicSize = %q, want %q", cfg.Gadget.MusicSize, "4G")
-	}
-	if !cfg.Gadget.UseExFAT {
-		t.Error("UseExFAT should be true")
-	}
 	if cfg.Archive.System != "rsync" {
 		t.Errorf("Archive.System = %q, want %q", cfg.Archive.System, "rsync")
 	}
@@ -176,11 +153,17 @@ topic = "teslausb"
 	if cfg.Archive.SavedClips {
 		t.Error("Archive.SavedClips should be false")
 	}
-	if cfg.CIFS.Server != "nas.local" {
-		t.Errorf("CIFS.Server = %q, want %q", cfg.CIFS.Server, "nas.local")
+	if cfg.Rsync.Server != "nas.local" {
+		t.Errorf("Rsync.Server = %q, want %q", cfg.Rsync.Server, "nas.local")
 	}
-	if cfg.CIFS.User != "admin" {
-		t.Errorf("CIFS.User = %q, want %q", cfg.CIFS.User, "admin")
+	if cfg.WiFi.HomeSSID != "MyNetwork" {
+		t.Errorf("WiFi.HomeSSID = %q, want %q", cfg.WiFi.HomeSSID, "MyNetwork")
+	}
+	if cfg.WiFi.HomePassword != "hunter2" {
+		t.Errorf("WiFi.HomePassword = %q, want %q", cfg.WiFi.HomePassword, "hunter2")
+	}
+	if !cfg.WiFi.Hidden {
+		t.Error("WiFi.Hidden should be true")
 	}
 	if cfg.Tuning.DirtyRatio != 50 {
 		t.Errorf("Tuning.DirtyRatio = %d, want 50", cfg.Tuning.DirtyRatio)
@@ -241,6 +224,10 @@ home_ssid = "MyNetwork"
 enabled = false
 interval_seconds = 120
 max_failures = 10
+
+[web]
+username = "admin"
+password = "letmein"
 `
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -268,6 +255,9 @@ max_failures = 10
 	if cfg.WiFi.Watchdog.MaxFailures != 10 {
 		t.Errorf("Watchdog.MaxFailures = %d, want 10", cfg.WiFi.Watchdog.MaxFailures)
 	}
+	if cfg.Web.Username != "admin" || cfg.Web.Password != "letmein" {
+		t.Errorf("Web auth = %q/%q, want admin/letmein", cfg.Web.Username, cfg.Web.Password)
+	}
 }
 
 func TestLoadConfigMissing(t *testing.T) {
@@ -280,9 +270,6 @@ func TestLoadConfigMissing(t *testing.T) {
 
 	// Verify the returned config has default values.
 	dflt := DefaultConfig()
-	if cfg.Gadget.CamSize != dflt.Gadget.CamSize {
-		t.Errorf("CamSize = %q, want default %q", cfg.Gadget.CamSize, dflt.Gadget.CamSize)
-	}
 	if cfg.Archive.System != dflt.Archive.System {
 		t.Errorf("Archive.System = %q, want default %q", cfg.Archive.System, dflt.Archive.System)
 	}
@@ -320,9 +307,6 @@ delay_seconds = 30
 
 	// Default values should be preserved
 	dflt := DefaultConfig()
-	if cfg.Gadget.CamSize != dflt.Gadget.CamSize {
-		t.Errorf("CamSize = %q, want default %q", cfg.Gadget.CamSize, dflt.Gadget.CamSize)
-	}
 	if cfg.Tuning.DirtyRatio != dflt.Tuning.DirtyRatio {
 		t.Errorf("Tuning.DirtyRatio = %d, want default %d", cfg.Tuning.DirtyRatio, dflt.Tuning.DirtyRatio)
 	}
@@ -337,5 +321,97 @@ delay_seconds = 30
 	}
 	if cfg.Wake.Method != dflt.Wake.Method {
 		t.Errorf("Wake.Method = %q, want default %q", cfg.Wake.Method, dflt.Wake.Method)
+	}
+}
+
+// hasWarning reports whether any warning contains substr.
+func hasWarning(warnings []string, substr string) bool {
+	for _, w := range warnings {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestValidate_FullyWiredConfigIsClean(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Archive.System = "cifs"
+	cfg.CIFS.Server = "192.168.1.100"
+	cfg.CIFS.Share = "TeslaCam"
+	cfg.CIFS.User = "tesla"
+	cfg.WiFi.HomeSSID = "home"
+	cfg.WiFi.HomePassword = "pw"
+
+	if w := cfg.Validate(); len(w) != 0 {
+		t.Errorf("expected no warnings for a complete config, got: %v", w)
+	}
+}
+
+func TestValidate_UnknownArchiveSystem(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WiFi.HomeSSID = "home"
+	cfg.WiFi.HomePassword = "pw"
+	cfg.Archive.System = "smbv1"
+
+	if !hasWarning(cfg.Validate(), "archive.system") {
+		t.Error("expected a warning for an unrecognized archive.system")
+	}
+}
+
+func TestValidate_BackendSelectedButUnconfigured(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WiFi.HomeSSID = "home"
+	cfg.WiFi.HomePassword = "pw"
+	cfg.Archive.System = "cifs" // server/share intentionally empty
+
+	if !hasWarning(cfg.Validate(), "cifs") {
+		t.Error("expected a warning when cifs is selected but server/share are unset")
+	}
+}
+
+// TestValidate_AllWakeMethodsRecognized is the regression guard for the
+// original bug class: a wake method that main.go handles must be accepted by
+// Validate, and vice versa. If someone adds a method to one and not the other,
+// this fails.
+func TestValidate_AllWakeMethodsRecognized(t *testing.T) {
+	for _, method := range []string{"none", "ble", "tessie", "webhook"} {
+		cfg := DefaultConfig()
+		cfg.WiFi.HomeSSID = "home"
+		cfg.WiFi.HomePassword = "pw"
+		cfg.Wake.Method = method
+		if hasWarning(cfg.Validate(), "is not recognized") {
+			t.Errorf("wake.method %q should be recognized", method)
+		}
+	}
+}
+
+func TestValidate_UnknownWakeMethod(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WiFi.HomeSSID = "home"
+	cfg.WiFi.HomePassword = "pw"
+	cfg.Wake.Method = "teslafi" // removed stub — must now warn, not silently no-op
+
+	if !hasWarning(cfg.Validate(), "wake.method") {
+		t.Error("expected a warning for an unrecognized wake.method")
+	}
+}
+
+func TestValidate_MissingWiFi(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Archive.System = "none"
+
+	if !hasWarning(cfg.Validate(), "wifi.home_ssid is not set") {
+		t.Error("expected a warning when home_ssid is unset")
+	}
+}
+
+func TestValidate_SSIDWithoutPassword(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Archive.System = "none"
+	cfg.WiFi.HomeSSID = "home" // no password
+
+	if !hasWarning(cfg.Validate(), "home_password is empty") {
+		t.Error("expected a warning when SSID is set without a password")
 	}
 }

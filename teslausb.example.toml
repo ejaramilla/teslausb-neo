@@ -5,6 +5,11 @@
 # ─── WiFi ───────────────────────────────────────────────
 [wifi]
 home_ssid = "YourNetworkName"
+# home_password provisions a NetworkManager connection at boot. REQUIRED on the
+# Buildroot image (it has no Raspberry Pi Imager step to seed WiFi). On the Pi
+# OS path you can leave it blank if you already set WiFi in Raspberry Pi Imager.
+home_password = "YourWiFiPassword"
+# hidden = true            # Set if your home SSID does not broadcast
 
 # Uncomment to enable AP hotspot when away from home WiFi:
 # [wifi.ap]
@@ -42,6 +47,9 @@ server = "192.168.1.100"
 share = "TeslaCam"
 user = "tesla"
 password = "your_password"
+# path = "TeslaCam"      # Subfolder within the share for dashcam clips.
+                         # Set path = "" to write to the share root. Honored by
+                         # all backends (cifs, rsync, rclone, nfs).
 
 # Uncomment for rsync over SSH instead:
 # [archive]
@@ -63,6 +71,13 @@ password = "your_password"
 # [nfs]
 # server = "192.168.1.100"
 # share = "/exports/teslacam"
+
+# ─── Web UI auth (optional, recommended) ───────────────
+# The web UI on port 80 can browse, download, AND DELETE footage. Set both to
+# require HTTP basic auth; leave blank and anyone on your network has access.
+# [web]
+# username = "admin"
+# password = "change_me"
 
 # ─── Notifications (optional) ──────────────────────────
 # Uncomment to get push notifications:
