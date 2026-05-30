@@ -78,6 +78,9 @@ BR2_PACKAGE_UTIL_LINUX=y
 BR2_PACKAGE_UTIL_LINUX_MOUNT=y
 BR2_PACKAGE_UTIL_LINUX_LOSETUP=y
 BR2_PACKAGE_UTIL_LINUX_FSTRIM=y
+# sfdisk: writes the MBR + exFAT partition table the Tesla requires inside each
+# cam/music/lightshow partition (see teslausb-provision.sh format_tesla_drive).
+BR2_PACKAGE_UTIL_LINUX_FDISK=y
 
 # ─── Device-mapper (for dm-snapshot + zram) ─────────────
 BR2_PACKAGE_LVM2=y

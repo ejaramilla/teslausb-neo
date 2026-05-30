@@ -63,6 +63,8 @@ The Pi Zero 2 W draws ~100 mA idle — well within the Tesla glovebox USB port's
 
 MBR only allows 4 primary partitions, so p4 is an extended partition containing the Tesla exFAT partitions as logical volumes. The Pi never mounts p5–p7 during normal operation — they are raw block devices passed directly to the USB gadget. They are only mounted during archiving (via a read-only dm-snapshot on the cam partition).
 
+Each of p5–p7 is itself a *partitioned* disk: a nested MBR with a single exFAT partition starting at sector 2048. The Tesla requires this (it rejects a bare exFAT written to the whole drive and offers to reformat), so the gadget exposes `[MBR + exFAT]` while the daemon reaches the inner exFAT through a read-only offset loop. This matches what the car's own "Format USB Drive" produces.
+
 ## Installation
 
 There are two install paths:

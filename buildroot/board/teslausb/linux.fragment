@@ -25,3 +25,8 @@ CONFIG_EXFAT_FS=y
 CONFIG_BLK_DEV_DM=m
 CONFIG_DM_SNAPSHOT=m
 CONFIG_ZRAM=m
+
+# ─── loop device ─────────────────────────────────────────────────────────
+# Each Tesla LUN is [MBR + exFAT]; the daemon reaches the inner exFAT via an
+# offset loop (losetup -o). Without loop support, archive/fsck/media-sync fail.
+CONFIG_BLK_DEV_LOOP=y

@@ -207,6 +207,11 @@ func (sm *StateMachine) boot() error {
 	// here we clear the snapshot/media mounts and dm-snapshot devices.
 	_ = fsutil.Unmount(snapshotMountpoint)
 	snapshot.Cleanup()
+	// Reclaim any offset loops a crashed run left bound to the Tesla partitions
+	// before we (re)attach fresh ones during fsck/archive/media-sync.
+	for _, p := range []string{camPartition, musicPartition, lightshowPartition} {
+		fsutil.DetachLoopsFor(p)
+	}
 
 	sm.gad = gadget.New("teslausb")
 
@@ -305,10 +310,25 @@ func (sm *StateMachine) createSnapshot() error {
 	return nil
 }
 
-// runFsck runs filesystem check on the live cam partition.
+// runFsck checks the cam partition's inner exFAT filesystem. The cam partition
+// is a [MBR + exFAT] disk, so we fsck the exFAT through an offset loop rather
+// than the raw partition device. Runs with the gadget deactivated.
 func (sm *StateMachine) runFsck() error {
 	slog.Info("running fsck on cam partition", "device", camPartition)
-	return fsutil.RunFsck(camPartition)
+	offset, err := fsutil.PartitionOffset(camPartition)
+	if err != nil {
+		return fmt.Errorf("fsck: %w", err)
+	}
+	loop, err := fsutil.AttachLoop(camPartition, offset, false)
+	if err != nil {
+		return fmt.Errorf("fsck: %w", err)
+	}
+	defer func() {
+		if err := fsutil.DetachLoop(loop); err != nil {
+			slog.Warn("failed to detach fsck loop", "loop", loop, "error", err)
+		}
+	}()
+	return fsutil.RunFsck(loop)
 }
 
 // runArchive mounts the snapshot, connects to the archive backend, and transfers files.
@@ -512,8 +532,22 @@ func (sm *StateMachine) runMediaSync(ctx context.Context) error {
 			continue
 		}
 
-		if err := fsutil.Mount(partition, mountpoint, "exfat", false); err != nil {
+		// Each media partition is a [MBR + exFAT] disk; mount its inner exFAT
+		// through an offset loop, the same mechanism used for cam.
+		offset, err := fsutil.PartitionOffset(partition)
+		if err != nil {
+			slog.Error("failed to read media partition table", "partition", partition, "error", err)
+			continue
+		}
+		loop, err := fsutil.AttachLoop(partition, offset, false)
+		if err != nil {
+			slog.Error("failed to attach media loop", "partition", partition, "error", err)
+			continue
+		}
+
+		if err := fsutil.Mount(loop, mountpoint, "exfat", false); err != nil {
 			slog.Error("failed to mount media partition", "partition", partition, "error", err)
+			_ = fsutil.DetachLoop(loop)
 			continue
 		}
 
@@ -536,6 +570,9 @@ func (sm *StateMachine) runMediaSync(ctx context.Context) error {
 
 		if err := fsutil.Unmount(mountpoint); err != nil {
 			slog.Error("failed to unmount media partition", "mountpoint", mountpoint, "error", err)
+		}
+		if err := fsutil.DetachLoop(loop); err != nil {
+			slog.Warn("failed to detach media loop", "loop", loop, "error", err)
 		}
 	}
 

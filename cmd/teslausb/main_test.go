@@ -54,10 +54,46 @@ func TestSetupScriptMatchesPartitionConstants(t *testing.T) {
 		"lightshow": partNum(t, lightshowPartition),
 	}
 	for label, num := range mapping {
-		// e.g. format_if_empty "${BOOT_DISK}p5" exfat cam
-		re := regexp.MustCompile(`format_if_empty\s+"\$\{BOOT_DISK\}p` + num + `"\s+exfat\s+` + label)
+		// e.g. format_tesla_drive "${BOOT_DISK}p5" cam 1
+		re := regexp.MustCompile(`format_tesla_drive\s+"\$\{BOOT_DISK\}p` + num + `"\s+` + label)
 		if !re.MatchString(script) {
 			t.Errorf("setup.sh does not format %s on p%s (constant is %s)", label, num, mapping[label])
+		}
+	}
+}
+
+// TestInstallScriptsUsePartitionedExfat is the regression guard for the
+// "car reformats to 1 GB" bug: the Tesla rejects a bare exFAT written directly
+// to a LUN and requires an MBR + exFAT partition. Both install paths must
+// partition each Tesla drive with sfdisk (type 07) and must NOT mkfs.exfat
+// directly on the raw cam/music/lightshow device.
+func TestInstallScriptsUsePartitionedExfat(t *testing.T) {
+	scripts := map[string]string{
+		"setup.sh":              "../../setup.sh",
+		"teslausb-provision.sh": "../../buildroot/board/teslausb/rootfs_overlay/usr/bin/teslausb-provision.sh",
+	}
+	// Bare exFAT straight onto a whole partition device — the broken pattern.
+	bareExfat := regexp.MustCompile(`mkfs\.exfat[^\n]*\$\{[A-Z_]+\}p[567]"`)
+
+	for name, path := range scripts {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		script := string(data)
+
+		if !regexp.MustCompile(`sfdisk`).MatchString(script) {
+			t.Errorf("%s does not use sfdisk to write a partition table (Tesla requires MBR+exFAT)", name)
+		}
+		if !regexp.MustCompile(`type=0?7`).MatchString(script) {
+			t.Errorf("%s does not create an exFAT-type (07) partition", name)
+		}
+		if bareExfat.MatchString(script) {
+			t.Errorf("%s formats bare exFAT directly on a raw partition device; the Tesla will reject it and reformat", name)
+		}
+		// mkfs.exfat must target a loop device (the inner partition), not pN.
+		if !regexp.MustCompile(`mkfs\.exfat[^\n]*\$loop`).MatchString(script) {
+			t.Errorf("%s should mkfs.exfat on the offset loop device, not the raw partition", name)
 		}
 	}
 }
