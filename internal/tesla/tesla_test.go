@@ -12,6 +12,7 @@ var (
 	_ WakeKeeper = NoopWakeKeeper{}
 	_ WakeKeeper = (*BLEWakeKeeper)(nil)
 	_ WakeKeeper = (*TessieWakeKeeper)(nil)
+	_ WakeKeeper = (*WebhookWakeKeeper)(nil)
 )
 
 func TestBLEWakeKeeper_DefaultBinaryPath(t *testing.T) {
@@ -95,5 +96,56 @@ func TestTessieNudge_ReturnsErrorOnConnectionFailure(t *testing.T) {
 	err := tw.nudgeWithURL(context.Background(), "http://127.0.0.1:1/VIN/wake")
 	if err == nil {
 		t.Error("expected error for connection refused")
+	}
+}
+
+func TestWebhookWakeKeeper_PostsActions(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		buf := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(buf)
+		seen = append(seen, string(buf))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	k := NewWebhookWakeKeeper(server.URL)
+	ctx := context.Background()
+	if err := k.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := k.Nudge(ctx); err != nil {
+		t.Fatalf("Nudge: %v", err)
+	}
+	if err := k.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	want := []string{`{"action":"start"}`, `{"action":"nudge"}`, `{"action":"stop"}`}
+	if len(seen) != len(want) {
+		t.Fatalf("got %d requests, want %d: %v", len(seen), len(want), seen)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("request %d body = %q, want %q", i, seen[i], want[i])
+		}
+	}
+}
+
+func TestWebhookWakeKeeper_ErrorOnServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	k := NewWebhookWakeKeeper(server.URL)
+	if err := k.Nudge(context.Background()); err == nil {
+		t.Error("expected error for HTTP 500 response")
 	}
 }

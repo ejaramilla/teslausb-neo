@@ -88,8 +88,21 @@ func TestCIFS_MountpointDefaultPath(t *testing.T) {
 }
 
 func TestNFS_MountpointDefaultPath(t *testing.T) {
-	b := NewNFS("server", "/share")
+	b := NewNFS("server", "/share", "TeslaCam")
 	if b.mountpoint == "" {
 		t.Error("NFS mountpoint should not be empty")
+	}
+}
+
+func TestCIFS_ArchiveRootHonorsPath(t *testing.T) {
+	b := NewCIFS(config.CIFSConfig{Server: "nas", Share: "s", Path: "TeslaCam"})
+	if got := b.archiveRoot(); got != filepath.Join(b.mountpoint, "TeslaCam") {
+		t.Errorf("archiveRoot = %q, want mountpoint/TeslaCam", got)
+	}
+
+	// Empty path must write to the share root, not a stray subdirectory.
+	root := NewCIFS(config.CIFSConfig{Server: "nas", Share: "s", Path: ""})
+	if got := root.archiveRoot(); got != root.mountpoint {
+		t.Errorf("archiveRoot with empty path = %q, want %q", got, root.mountpoint)
 	}
 }

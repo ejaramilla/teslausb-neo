@@ -338,6 +338,9 @@ if [ ! -f /data/teslausb.toml ]; then
 
 [wifi]
 home_ssid = "YourNetworkName"
+# Leave home_password blank if you configured WiFi in Raspberry Pi Imager;
+# otherwise set it and the daemon will create the connection on boot.
+home_password = ""
 
 [archive]
 system = "cifs"
@@ -348,7 +351,7 @@ share = "TeslaCam"
 user = "tesla"
 password = "changeme"
 TOML
-    warn "IMPORTANT: Edit /data/teslausb.toml with your WiFi SSID and archive settings!"
+    warn "IMPORTANT: Edit /data/teslausb.toml with your WiFi and archive settings!"
 fi
 
 # ─── Step 12: Load dm-mod for snapshots ───────────────

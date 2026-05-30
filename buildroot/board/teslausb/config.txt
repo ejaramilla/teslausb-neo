@@ -12,8 +12,9 @@ fixup_file=fixup.dat
 kernel=zImage
 arm_64bit=0
 
-# USB OTG gadget mode
-dtoverlay=dwc2
+# USB OTG gadget mode. dr_mode=otg matches the Pi OS path (setup.sh) so both
+# images behave identically when plugged into the car (a powered host).
+dtoverlay=dwc2,dr_mode=otg
 
 # Disable HDMI (headless, saves ~25mA and boot time)
 hdmi_blanking=2

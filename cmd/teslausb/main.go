@@ -596,7 +596,7 @@ func buildArchiveBackend(cfg config.Config) archive.Backend {
 	case "rclone":
 		return archive.NewRclone("teslausb", cfg.Rclone.Path)
 	case "nfs":
-		return archive.NewNFS(cfg.NFS.Server, cfg.NFS.Share)
+		return archive.NewNFS(cfg.NFS.Server, cfg.NFS.Share, cfg.NFS.Path)
 	default:
 		slog.Warn("unknown archive system, using noop", "system", cfg.Archive.System)
 		return &noopBackend{}
@@ -625,6 +625,8 @@ func buildWakeKeeper(cfg config.WakeConfig) tesla.WakeKeeper {
 		return tesla.NewBLEWakeKeeper(cfg.BLEVIN, "/usr/bin/tesla-control")
 	case "tessie":
 		return tesla.NewTessieWakeKeeper(cfg.Tessie.Token, cfg.Tessie.VIN)
+	case "webhook":
+		return tesla.NewWebhookWakeKeeper(cfg.WebhookURL)
 	default:
 		return tesla.NoopWakeKeeper{}
 	}
@@ -666,6 +668,14 @@ func main() {
 		}
 	}
 
+	// Surface configuration problems loudly. Each warning is a setting that is
+	// selected but cannot take effect (a "silent no-op"); logging it at WARN
+	// turns an invisible misconfiguration into something a user can see in the
+	// journal.
+	for _, warning := range cfg.Validate() {
+		slog.Warn("config", "issue", warning)
+	}
+
 	// Apply system tuning FIRST (VM params, BFQ, CPU governor).
 	sys.ApplyAll(sys.TuningConfig{
 		DirtyRatio:              cfg.Tuning.DirtyRatio,
@@ -688,6 +698,14 @@ func main() {
 	notifier := buildNotifier(cfg.Notify)
 	wakeKeeper := buildWakeKeeper(cfg.Wake)
 	wifiMgr := wifi.NewManager()
+
+	// Provision the home WiFi connection from config so the device can join the
+	// network unattended. This is what makes the Buildroot image self-contained
+	// — it has no Raspberry Pi Imager step to pre-seed a NetworkManager profile.
+	// No-op when home_password is empty (relies on an externally-managed profile).
+	if err := wifiMgr.EnsureHomeConnection(cfg.WiFi.HomeSSID, cfg.WiFi.HomePassword, cfg.WiFi.Hidden); err != nil {
+		slog.Warn("failed to provision home wifi connection", "error", err)
+	}
 	watcher := fswatch.NewWatcher(cfg.Idle.WriteThresholdBytes, cfg.Idle.TimeoutSeconds, 1)
 	healthMon := health.NewMonitor(cfg.Health, notifier)
 
@@ -744,7 +762,11 @@ func main() {
 
 	go func() {
 		statusCh := make(chan web.StatusInfo, 1)
-		srv := web.NewServer(web.Config{ArchiveDir: snapshotMountpoint}, nil, statusCh)
+		srv := web.NewServer(web.Config{
+			ArchiveDir: snapshotMountpoint,
+			AuthUser:   cfg.Web.Username,
+			AuthPass:   cfg.Web.Password,
+		}, nil, statusCh)
 		if err := srv.Start(":80"); err != nil {
 			slog.Error("web server failed", "error", err)
 		}

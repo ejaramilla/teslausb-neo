@@ -13,16 +13,25 @@ import (
 type NFSBackend struct {
 	server     string
 	share      string
+	path       string
 	mountpoint string
 }
 
-// NewNFS creates an NFSBackend with the given parameters.
-func NewNFS(server, share string) *NFSBackend {
+// NewNFS creates an NFSBackend with the given parameters. path is a
+// subdirectory within the export for dashcam footage (e.g. "TeslaCam").
+func NewNFS(server, share, path string) *NFSBackend {
 	return &NFSBackend{
 		server:     server,
 		share:      share,
+		path:       path,
 		mountpoint: "/tmp/archive_nfs",
 	}
+}
+
+// archiveRoot is the destination directory for dashcam files: the mounted
+// export plus the configured subpath. Media sync stays at the export root.
+func (b *NFSBackend) archiveRoot() string {
+	return filepath.Join(b.mountpoint, b.path)
 }
 
 func (b *NFSBackend) Name() string { return "nfs" }
@@ -66,7 +75,7 @@ func (b *NFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []s
 		}
 
 		src := filepath.Join(srcRoot, f)
-		dst := filepath.Join(b.mountpoint, f)
+		dst := filepath.Join(b.archiveRoot(), f)
 
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return fmt.Errorf("nfs: mkdir for %s: %w", f, err)
@@ -80,9 +89,12 @@ func (b *NFSBackend) ArchiveFiles(ctx context.Context, srcRoot string, files []s
 	return nil
 }
 
-// ArchiveLog writes a log summary file to the NFS share root.
+// ArchiveLog writes a log summary file alongside the archived footage.
 func (b *NFSBackend) ArchiveLog(ctx context.Context, content []byte) error {
-	dst := filepath.Join(b.mountpoint, "teslausb.log")
+	if err := os.MkdirAll(b.archiveRoot(), 0o755); err != nil {
+		return fmt.Errorf("nfs: mkdir for log: %w", err)
+	}
+	dst := filepath.Join(b.archiveRoot(), "teslausb.log")
 	if err := os.WriteFile(dst, content, 0o644); err != nil {
 		return fmt.Errorf("nfs: write log: %w", err)
 	}
