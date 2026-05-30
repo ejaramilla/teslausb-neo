@@ -182,25 +182,45 @@ else
         fi
     done
 
-    # Format. Each partition was just created empty, but guard against
-    # formatting anything that unexpectedly already holds a filesystem.
-    format_if_empty() {
-        local dev="$1" type="$2" label="$3"
-        if blkid "$dev" >/dev/null 2>&1; then
-            warn "$dev already has a filesystem; leaving it untouched."
-            return
+    # Data partition is plain ext4 (mounted by the Pi itself).
+    if blkid "${BOOT_DISK}p3" >/dev/null 2>&1; then
+        warn "${BOOT_DISK}p3 already has a filesystem; leaving it untouched."
+    else
+        log "Formatting data (ext4)..."
+        mkfs.ext4 -F -L data "${BOOT_DISK}p3"
+    fi
+
+    # Format each Tesla partition as a PARTITIONED disk: an MBR with a single
+    # exFAT partition starting at LBA 2048. The Tesla REQUIRES this layout — its
+    # own "Format USB Drive" produces exactly it, and a bare exFAT written to
+    # the whole device is not recognized (the car offers to reformat and can
+    # grab the wrong drive). The exFAT is created on an offset loop so its
+    # PartitionOffset matches a standalone drive.
+    PART_OFFSET=1048576   # 2048 sectors * 512; keep in sync with the sfdisk start
+    format_tesla_drive() {
+        local dev="$1" label="$2" make_teslacam="$3" loop
+        log "Partitioning + formatting $label..."
+        printf 'label: dos\nstart=2048, type=07\n' | sfdisk -q --wipe always "$dev"
+        sync
+        udevadm settle 2>/dev/null || true
+        loop=$(losetup -o "$PART_OFFSET" --find --show "$dev")
+        mkfs.exfat -L "$label" "$loop"
+        if [ "$make_teslacam" = "1" ]; then
+            mkdir -p /mnt/cam
+            if mount -t exfat "$loop" /mnt/cam; then
+                mkdir -p /mnt/cam/TeslaCam/RecentClips \
+                         /mnt/cam/TeslaCam/SavedClips \
+                         /mnt/cam/TeslaCam/SentryClips
+                umount /mnt/cam || umount -l /mnt/cam || true
+            else
+                warn "Could not mount cam to create TeslaCam/; create it manually."
+            fi
         fi
-        log "Formatting $label ($type)..."
-        if [ "$type" = "ext4" ]; then
-            mkfs.ext4 -F -L "$label" "$dev"
-        else
-            mkfs.exfat -L "$label" "$dev"
-        fi
+        losetup -d "$loop"
     }
-    format_if_empty "${BOOT_DISK}p3" ext4 data
-    format_if_empty "${BOOT_DISK}p5" exfat cam
-    format_if_empty "${BOOT_DISK}p6" exfat music
-    format_if_empty "${BOOT_DISK}p7" exfat lightshow
+    format_tesla_drive "${BOOT_DISK}p5" cam 1
+    format_tesla_drive "${BOOT_DISK}p6" music 0
+    format_tesla_drive "${BOOT_DISK}p7" lightshow 0
 
     log "Partitions created and formatted."
 fi
@@ -216,18 +236,26 @@ if ! grep -q "LABEL=data" /etc/fstab; then
     echo "LABEL=data /data ext4 defaults,noatime 0 2" >> /etc/fstab
 fi
 
-# ─── Step 5: Create Tesla folder structure ─────────────
-log "Creating Tesla folder structure on cam partition..."
-mkdir -p /mnt/cam
-mount "${BOOT_DISK}p5" /mnt/cam 2>/dev/null || mount LABEL=cam /mnt/cam || true
-if mountpoint -q /mnt/cam; then
-    mkdir -p /mnt/cam/TeslaCam/RecentClips
-    mkdir -p /mnt/cam/TeslaCam/SavedClips
-    mkdir -p /mnt/cam/TeslaCam/SentryClips
-    umount /mnt/cam
-    log "Tesla folder structure created."
+# ─── Step 5: Ensure the TeslaCam folder exists on the cam partition ────
+# On a fresh partitioning the TeslaCam tree was already created above. This
+# step is idempotent and covers the "partitions already existed" path; the cam
+# partition is a [MBR + exFAT] disk, so we reach its exFAT via an offset loop.
+log "Ensuring TeslaCam folder structure on cam partition..."
+CAM_LOOP=$(losetup -o 1048576 --find --show "${BOOT_DISK}p5" 2>/dev/null) || CAM_LOOP=""
+if [ -n "$CAM_LOOP" ]; then
+    mkdir -p /mnt/cam
+    if mount -t exfat "$CAM_LOOP" /mnt/cam 2>/dev/null; then
+        mkdir -p /mnt/cam/TeslaCam/RecentClips \
+                 /mnt/cam/TeslaCam/SavedClips \
+                 /mnt/cam/TeslaCam/SentryClips
+        umount /mnt/cam || umount -l /mnt/cam || true
+        log "TeslaCam folder structure verified."
+    else
+        warn "Could not mount cam partition. Create TeslaCam/ manually if needed."
+    fi
+    losetup -d "$CAM_LOOP" 2>/dev/null || true
 else
-    warn "Could not mount cam partition to create folders. You may need to create TeslaCam/ manually."
+    warn "Could not attach cam partition loop to verify TeslaCam/."
 fi
 
 log "Creating Music folder on music partition..."

@@ -37,6 +37,7 @@ REQUIRED = {
     "CONFIG_BLK_DEV_DM": "device-mapper (snapshot base)",
     "CONFIG_DM_SNAPSHOT": "dm-snapshot for the archive COW mechanism",
     "CONFIG_ZRAM": "RAM-backed COW store for the snapshot",
+    "CONFIG_BLK_DEV_LOOP": "offset loop to reach each LUN's inner exFAT partition",
 }
 
 

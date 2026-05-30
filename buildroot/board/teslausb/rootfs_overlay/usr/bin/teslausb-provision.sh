@@ -71,18 +71,37 @@ for n in 5 6 7; do
     fi
 done
 
-mkfs.exfat -L cam "${DISK}p5"
-mkfs.exfat -L music "${DISK}p6"
-mkfs.exfat -L lightshow "${DISK}p7"
+# Format each Tesla partition as a PARTITIONED disk: an MBR with a single
+# exFAT partition starting at LBA 2048. The Tesla requires this layout — its
+# own "Format USB Drive" produces exactly it, and a bare exFAT written directly
+# to the device is not recognized (the car offers to reformat and may grab the
+# wrong drive). The exFAT is created on an offset loop so its PartitionOffset is
+# consistent with a standalone drive (matches upstream teslausb's image layout).
+PART_OFFSET=1048576   # 2048 sectors * 512; keep in sync with the sfdisk start
 
-# Pre-create the TeslaCam folder tree so the car records immediately.
-mkdir -p /mnt/provision
-if mount -t exfat "${DISK}p5" /mnt/provision 2>/dev/null; then
-    mkdir -p /mnt/provision/TeslaCam/RecentClips \
-             /mnt/provision/TeslaCam/SavedClips \
-             /mnt/provision/TeslaCam/SentryClips
-    umount /mnt/provision || umount -l /mnt/provision || true
-fi
-rmdir /mnt/provision 2>/dev/null || true
+format_tesla_drive() {
+    dev="$1"; label="$2"; make_teslacam="$3"
+    log "partitioning + formatting $dev ($label)"
+    printf 'label: dos\nstart=2048, type=07\n' | sfdisk -q --wipe always "$dev"
+    sync
+    udevadm settle 2>/dev/null || true
+    loop=$(losetup -o "$PART_OFFSET" --find --show "$dev")
+    mkfs.exfat -L "$label" "$loop"
+    if [ "$make_teslacam" = "1" ]; then
+        mkdir -p /mnt/provision
+        if mount -t exfat "$loop" /mnt/provision; then
+            mkdir -p /mnt/provision/TeslaCam/RecentClips \
+                     /mnt/provision/TeslaCam/SavedClips \
+                     /mnt/provision/TeslaCam/SentryClips
+            umount /mnt/provision || umount -l /mnt/provision || true
+        fi
+        rmdir /mnt/provision 2>/dev/null || true
+    fi
+    losetup -d "$loop"
+}
+
+format_tesla_drive "${DISK}p5" cam 1
+format_tesla_drive "${DISK}p6" music 0
+format_tesla_drive "${DISK}p7" lightshow 0
 
 log "provisioning complete"

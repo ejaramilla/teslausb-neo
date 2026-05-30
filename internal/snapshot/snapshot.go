@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/ejaramilla/teslausb-neo/internal/fsutil"
 )
 
 // defaultCOWSizeMB is the zram copy-on-write size. Tesla writes sequentially
@@ -27,6 +29,7 @@ type Snapshot struct {
 	zramDevice   string
 	zramSizeMB   int
 	mountpoint   string
+	loopDevice   string // offset loop exposing the inner exFAT partition
 }
 
 // Create sets up a new dm-snapshot on originDevice.
@@ -109,13 +112,28 @@ func Cleanup() {
 	run("remove", "--retry", snapshotName+"-origin")
 }
 
-// Mount mounts the snapshot device read-only at the given mountpoint.
+// Mount mounts the snapshot's inner exFAT partition read-only at mountpoint.
+// The snapshot device is a copy of the whole raw partition ([MBR + exFAT]), so
+// we attach an offset loop at the partition start and mount that — the same
+// single-loop mechanism the daemon uses everywhere it needs the inner exFAT.
 func (s *Snapshot) Mount(mountpoint string) error {
 	s.mountpoint = mountpoint
+	snapDev := "/dev/mapper/" + s.snapshotName
+
+	offset, err := fsutil.PartitionOffset(snapDev)
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	loop, err := fsutil.AttachLoop(snapDev, offset, true)
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+	s.loopDevice = loop
+
 	if _, err := s.runCmd("mkdir", "-p", mountpoint); err != nil {
 		return fmt.Errorf("snapshot: mkdir %s: %w", mountpoint, err)
 	}
-	if _, err := s.runCmd("mount", "-o", "ro", "/dev/mapper/"+s.snapshotName, mountpoint); err != nil {
+	if _, err := s.runCmd("mount", "-o", "ro", loop, mountpoint); err != nil {
 		return fmt.Errorf("snapshot: mount: %w", err)
 	}
 	return nil
@@ -134,6 +152,14 @@ func (s *Snapshot) Release() error {
 			}
 		}
 		s.mountpoint = ""
+	}
+
+	// Detach the offset loop before removing the dm device it is backed by.
+	if s.loopDevice != "" {
+		if err := fsutil.DetachLoop(s.loopDevice); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("snapshot: detach loop: %w", err)
+		}
+		s.loopDevice = ""
 	}
 
 	// Remove snapshot before origin (order matters). --retry waits out a
